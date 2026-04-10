@@ -1,0 +1,4 @@
+pydicom>=2.4.0
+pyqt6>=6.4.0
+numpy>=1.24.0
+pylibjpeg>=2.0.0
