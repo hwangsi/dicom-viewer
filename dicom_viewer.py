@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DICOM Viewer - Lecture Edition v2
+Hwang Viewer
 ==================================
 설치: pip install pydicom pyqt6 numpy pylibjpeg
 
@@ -129,10 +129,62 @@ def build_overlay(ds, idx, total):
 
 
 # ─────────────────────────────────────────────────────────────
+#  Cross-reference 좌표 계산 헬퍼
+# ─────────────────────────────────────────────────────────────
+def _has_position_tags(ds):
+    return (hasattr(ds, 'ImagePositionPatient') and
+            hasattr(ds, 'ImageOrientationPatient') and
+            hasattr(ds, 'PixelSpacing'))
+
+def _pixel_to_world(ds, row_f, col_f):
+    """이미지 픽셀 (row, col) → 3D 월드 좌표 (mm)."""
+    try:
+        ipp     = np.array([float(x) for x in ds.ImagePositionPatient])
+        iop     = np.array([float(x) for x in ds.ImageOrientationPatient])
+        ps      = ds.PixelSpacing
+        row_dir = iop[:3]
+        col_dir = iop[3:]
+        return ipp + col_f * float(ps[1]) * row_dir + row_f * float(ps[0]) * col_dir
+    except Exception:
+        return None
+
+def _world_to_pixel(ds, world):
+    """3D 월드 좌표 → 이미지 픽셀 (row_f, col_f)."""
+    try:
+        ipp     = np.array([float(x) for x in ds.ImagePositionPatient])
+        iop     = np.array([float(x) for x in ds.ImageOrientationPatient])
+        ps      = ds.PixelSpacing
+        row_dir = iop[:3]
+        col_dir = iop[3:]
+        delta   = world - ipp
+        col_f   = np.dot(delta, row_dir) / float(ps[1])
+        row_f   = np.dot(delta, col_dir) / float(ps[0])
+        return row_f, col_f
+    except Exception:
+        return None
+
+def _find_best_slice(pairs, world):
+    """시리즈에서 world 좌표에 가장 가까운 슬라이스 인덱스 반환."""
+    best_i, best_d = 0, float('inf')
+    for i, (_, ds) in enumerate(pairs):
+        try:
+            ipp    = np.array([float(x) for x in ds.ImagePositionPatient])
+            iop    = np.array([float(x) for x in ds.ImageOrientationPatient])
+            normal = np.cross(iop[:3], iop[3:])
+            dist   = abs(np.dot(world - ipp, normal))
+            if dist < best_d:
+                best_d, best_i = dist, i
+        except Exception:
+            continue
+    return best_i
+
+
+# ─────────────────────────────────────────────────────────────
 #  단일 DICOM 패널
 # ─────────────────────────────────────────────────────────────
 class DicomPanel(QWidget):
-    clicked = pyqtSignal(object)
+    clicked       = pyqtSignal(object)
+    cross_clicked = pyqtSignal(object, object)  # (panel, world_np_array)
 
     def __init__(self, panel_id=0, parent=None):
         super().__init__(parent)
@@ -144,11 +196,14 @@ class DicomPanel(QWidget):
         self.zoom      = 1.0
         self._raw_pix  = None
         self._disp_pix = None
-        self._last_pos   = None
-        self._drag_accum = 0       # 좌클릭 드래그 픽셀 누적
-        self._active     = False
-        self._pixel_cache = {}     # {slice_idx: np.ndarray}
-        self.show_tags = True
+        self._last_pos    = None
+        self._drag_accum  = 0
+        self._drag_moved  = False      # 드래그 vs 클릭 구분
+        self._active      = False
+        self._pixel_cache = {}
+        self.show_tags    = True
+        self.cross_link   = False      # cross-reference 활성 여부
+        self._crosshair   = None       # (row_f, col_f) 이미지 좌표, None=없음
 
         self.setMinimumSize(200, 200)
         self.setStyleSheet("background:#000;")
@@ -325,6 +380,22 @@ class DicomPanel(QWidget):
                 for i, line in enumerate(reversed(br)):
                     draw_text(M, base - LH * i, line, right=True)
 
+        # ── Cross-reference 교차선 ───────────────────────────
+        if self._crosshair is not None:
+            row_f, col_f = self._crosshair
+            # 이미지 픽셀 → 표시 픽셀 변환
+            ch_x = int(col_f * W / iw)
+            ch_y = int(row_f * H / ih)
+            # 시안색 점선 십자선
+            pen = QPen(QColor(0, 255, 255), 1)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawLine(0, ch_y, W, ch_y)   # 수평선
+            painter.drawLine(ch_x, 0, ch_x, H)   # 수직선
+            # 중심 원
+            painter.setPen(QPen(QColor(0, 255, 255), 2))
+            painter.drawEllipse(ch_x - 6, ch_y - 6, 12, 12)
+
         # 활성 패널 파란 테두리
         if self._active:
             painter.setPen(QPen(QColor(0, 160, 255), 3))
@@ -367,18 +438,76 @@ class DicomPanel(QWidget):
 
     # ── 마우스 ───────────────────────────────────────────────
     def mousePressEvent(self, event):
-        self._last_pos = event.pos()
+        self._last_pos   = event.pos()
+        self._drag_accum = 0
+        self._drag_moved = False
         self.clicked.emit(self)
 
     def mouseReleaseEvent(self, event):
+        # cross-link 모드: 좌클릭이고 드래그하지 않은 경우 → crosshair 설정
+        if (self.cross_link
+                and event.button() == Qt.MouseButton.LeftButton
+                and not self._drag_moved
+                and self.series):
+            self._emit_cross_click(event.pos())
         self._last_pos   = None
         self._drag_accum = 0
+
+    def _emit_cross_click(self, pos):
+        """클릭 위치를 3D 월드 좌표로 변환해 cross_clicked 시그널 발신."""
+        ds = self._get_ds()
+        if ds is None or not _has_position_tags(ds):
+            return
+        row_f, col_f = self._screen_to_image(pos.x(), pos.y())
+        if row_f is None:
+            return
+        world = _pixel_to_world(ds, row_f, col_f)
+        if world is None:
+            return
+        self._crosshair = (row_f, col_f)
+        self._make_display()
+        self.cross_clicked.emit(self, world)
+
+    def _screen_to_image(self, sx, sy):
+        """화면 픽셀(sx,sy) → 이미지 픽셀(row_f, col_f). 범위 밖이면 None,None."""
+        if self._raw_pix is None or self._disp_pix is None:
+            return None, None
+        iw = self._raw_pix.width()
+        ih = self._raw_pix.height()
+        dw = self._disp_pix.width()
+        dh = self._disp_pix.height()
+        ox = (self.width()  - dw) // 2
+        oy = (self.height() - dh) // 2
+        lx = sx - ox
+        ly = sy - oy
+        if lx < 0 or ly < 0 or lx >= dw or ly >= dh:
+            return None, None
+        return ly * ih / dh, lx * iw / dw   # row_f, col_f
+
+    def set_crosshair_from_world(self, world):
+        """외부에서 world 좌표를 받아 교차선 설정 + 가장 가까운 슬라이스로 이동."""
+        if not self.series:
+            return
+        best_i = _find_best_slice(self.series, world)
+        self.idx = best_i
+        ds = self.series[best_i][1]
+        self._crosshair = _world_to_pixel(ds, world) if _has_position_tags(ds) else None
+        self._render()
+
+    def clear_crosshair(self):
+        self._crosshair = None
+        if self._raw_pix:
+            self._make_display()
 
     def mouseMoveEvent(self, event):
         if self._last_pos is None or not self.series:
             return
         dy = event.pos().y() - self._last_pos.y()
         dx = event.pos().x() - self._last_pos.x()
+
+        # 3px 이상 움직이면 드래그로 판정
+        if abs(dx) > 3 or abs(dy) > 3:
+            self._drag_moved = True
 
         if event.buttons() & Qt.MouseButton.LeftButton:
             # 좌클릭 드래그 상하 → 슬라이스 이동 (10px 누적마다 1장)
@@ -433,6 +562,8 @@ class DicomPanel(QWidget):
             self.window()._reset_active()
         elif key == Qt.Key.Key_Space:
             self.window()._toggle_panel_zoom()
+        elif key == Qt.Key.Key_X:
+            self.window()._toggle_cross_link()
         else:
             super().keyPressEvent(event)
 
@@ -457,6 +588,7 @@ class ViewerGrid(QWidget):
         self.panels       = []
         self.active_panel = None
         self._mode        = None
+        self._saved_2x2   = []   # [(series, idx, wl, ww, zoom), ...] Space 토글용 저장
 
         self.grid = QGridLayout(self)
         self.grid.setSpacing(2)
@@ -466,8 +598,9 @@ class ViewerGrid(QWidget):
     def set_layout(self, mode):
         if mode == self._mode:
             return
-        old_series = [p.series[:] for p in self.panels]
-        old_tags   = self.panels[0].show_tags if self.panels else True
+        old_series   = [p.series[:] for p in self.panels]
+        old_tags     = self.panels[0].show_tags if self.panels else True
+        old_crosslnk = self.panels[0].cross_link if self.panels else False
         for p in self.panels:
             self.grid.removeWidget(p)
             p.deleteLater()
@@ -484,8 +617,11 @@ class ViewerGrid(QWidget):
 
         for i, (r, c) in enumerate(positions):
             p = DicomPanel(panel_id=i, parent=self)
-            p.show_tags = old_tags
+            p.show_tags  = old_tags
+            p.cross_link = old_crosslnk
             p.clicked.connect(self._on_clicked)
+            if old_crosslnk:
+                p.cross_clicked.connect(self._on_cross_clicked)
             p.setAcceptDrops(True)
 
             if mode == '2x2' and all_same and single_series:
@@ -540,6 +676,40 @@ class ViewerGrid(QWidget):
 
         self._activate(self.panels[0])
 
+    def save_2x2_state(self):
+        """현재 2×2 패널 상태(series, idx, wl, ww, zoom) + 활성 패널 인덱스 저장."""
+        self._saved_2x2 = [
+            (p.series[:], p.idx, p.wl, p.ww, p.zoom)
+            for p in self.panels
+        ]
+        # 활성 패널이 몇 번째인지 저장
+        self._saved_2x2_active = next(
+            (i for i, p in enumerate(self.panels) if p is self.active_panel), 0
+        )
+
+    def restore_2x2_state(self):
+        """저장된 2×2 상태 복원. 없으면 False 반환."""
+        if not self._saved_2x2:
+            return False
+        self.set_layout('2x2')
+        for i, (series, idx, wl, ww, zoom) in enumerate(self._saved_2x2):
+            if i >= len(self.panels):
+                break
+            p = self.panels[i]
+            if series:
+                p.series       = series
+                p.idx          = idx
+                p.wl           = wl
+                p.ww           = ww
+                p.zoom         = zoom
+                p._pixel_cache = {}
+                p._render()
+        # 저장된 활성 패널 복원 (기본값 0)
+        active_i = getattr(self, '_saved_2x2_active', 0)
+        active_i = min(active_i, len(self.panels) - 1)
+        self._activate(self.panels[active_i])
+        return True
+
     def toggle_tags_all(self):
         if not self.panels:
             return
@@ -549,6 +719,31 @@ class ViewerGrid(QWidget):
 
     def tag_state(self):
         return self.panels[0].show_tags if self.panels else True
+
+    # ── Cross-reference ──────────────────────────────────────
+    def set_cross_link(self, active):
+        """모든 패널에 cross_link 모드 설정 및 시그널 연결/해제."""
+        for p in self.panels:
+            p.cross_link = active
+            try:
+                p.cross_clicked.disconnect()
+            except Exception:
+                pass
+            if active:
+                p.cross_clicked.connect(self._on_cross_clicked)
+        if not active:
+            for p in self.panels:
+                p.clear_crosshair()
+
+    def _on_cross_clicked(self, src_panel, world):
+        """src_panel에서 클릭 → 나머지 패널에 교차선+슬라이스 업데이트."""
+        for p in self.panels:
+            if p is src_panel:
+                continue
+            p.set_crosshair_from_world(world)
+
+    def cross_link_state(self):
+        return self.panels[0].cross_link if self.panels else False
 
     def grab_active(self):
         if not self.active_panel:
@@ -664,7 +859,7 @@ class SeriesSidebar(QWidget):
 class DicomViewer(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("DICOM Viewer  —  Lecture Edition")
+        self.setWindowTitle("Hwang Viewer")
         self.setAcceptDrops(True)
         self._series_list = []
         self._series_page = 0      # 현재 페이지 (0-based, 4개씩)
@@ -729,6 +924,7 @@ class DicomViewer(QMainWindow):
         self._act(vm, "🏷️  Tag Overlay ON/OFF",        "T",     self._toggle_tags)
         self._act(vm, "↺  Reset W/L & Zoom",            "R",     self._reset_active)
         self._act(vm, "⛶  Toggle 1×1 / 2×2  (Space)",  "Space", self._toggle_panel_zoom)
+        self._act(vm, "✛  Cross-reference ON/OFF",      "X",     self._toggle_cross_link)
         vm.addSeparator()
         self._act(vm, "⊞  Load 4 Series → 2×2", "", self._load_4_to_grid)
 
@@ -767,6 +963,7 @@ class DicomViewer(QMainWindow):
 
         tbtn("🏷️ Tags",    self._toggle_tags)
         tbtn("↺ Reset WL", self._reset_active)
+        tbtn("✛ Cross-ref", self._toggle_cross_link)
         tb.addSeparator()
         tbtn("📋 Copy",    self.copy_active)
         tbtn("💾 Save",    self.save_active)
@@ -936,6 +1133,16 @@ class DicomViewer(QMainWindow):
             return
         self._load_current_page()
 
+    def _toggle_cross_link(self):
+        new_state = not self.viewer_grid.cross_link_state()
+        self.viewer_grid.set_cross_link(new_state)
+        if new_state:
+            self.statusBar().showMessage(
+                "✛  Cross-reference ON  —  좌클릭으로 위치 지정  |  X: 끄기"
+            )
+        else:
+            self.statusBar().showMessage("✛  Cross-reference OFF")
+
     def _toggle_tags(self):
         self.viewer_grid.toggle_tags_all()
         state = self.viewer_grid.tag_state()
@@ -946,23 +1153,32 @@ class DicomViewer(QMainWindow):
     def _toggle_panel_zoom(self):
         """Space: 활성 패널 1×1 확대 ↔ 2×2 복원 토글"""
         if self.viewer_grid._mode == '1x1':
-            # 현재 1×1 → 2×2로 복원
-            self._load_current_page()
-            self.statusBar().showMessage("↩  2×2 복원  |  Space: 다시 확대")
+            # 1×1 → 2×2: 저장된 상태로 복원
+            if self.viewer_grid.restore_2x2_state():
+                self.statusBar().showMessage("↩  2×2 복원  |  Space: 다시 확대")
+            else:
+                self._load_current_page()
+                self.statusBar().showMessage("↩  2×2 복원  |  Space: 다시 확대")
         else:
-            # 현재 2×2 → 활성 패널만 1×1 확대
+            # 2×2 → 1×1: 현재 상태 저장 후 활성 패널 확대
             active = self.viewer_grid.active_panel
             if active and active.series:
-                saved = active.series[:]
-                saved_idx = active.idx
+                self.viewer_grid.save_2x2_state()          # ← 상태 저장
+                saved       = active.series[:]
+                saved_idx   = active.idx
+                saved_wl    = active.wl
+                saved_ww    = active.ww
+                saved_zoom  = active.zoom
                 self.viewer_grid.set_layout('1x1')
-                self.viewer_grid.panels[0].load_series(saved, start_idx=saved_idx)
+                p = self.viewer_grid.panels[0]
+                p.series      = saved
+                p.idx         = saved_idx
+                p.wl          = saved_wl
+                p.ww          = saved_ww
+                p.zoom        = saved_zoom
+                p._pixel_cache = {}
+                p._render()
                 self.statusBar().showMessage("🔍  1×1 확대  |  Space: 2×2 복원")
-        self.viewer_grid.toggle_tags_all()
-        state = self.viewer_grid.tag_state()
-        self.statusBar().showMessage(
-            f"🏷️  DICOM 태그 오버레이: {'ON  ✓' if state else 'OFF'}"
-        )
 
     def _reset_active(self):
         p = self.viewer_grid.active_panel
@@ -1032,7 +1248,7 @@ def main():
         sys.exit(1)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("DICOM Viewer")
+    app.setApplicationName("Hwang Viewer")
     app.setStyle("Fusion")
 
     pal = QPalette()
