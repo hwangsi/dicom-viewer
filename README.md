@@ -1,6 +1,8 @@
 # Hwang Viewer for Radiologic Presentation
 
 강의 자료(PPT) 제작에 최적화된 가볍고 빠른 Windows DICOM 뷰어.
+이제 PPT에서 이미지 각각을 붙여서 간격줄이고 크롭할 필요 없이, 뷰어에서 직접 간격 조정하고 zoom/panning을 시행하여
+1x1에서 3x3 까지 모든 슬라이스 이미지를 한장에 만들 수 있습니다.
 단일 Python 파일(`dicom_viewer.py`)로 실행 가능합니다.
 
 ---
