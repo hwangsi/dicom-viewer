@@ -4,6 +4,7 @@
 시리즈 간격 조절, cross link, copy screen and area 가능하여 바로 capture 가능합니다.
 단일 Python 파일(`dicom_viewer.py`)로 실행 가능합니다.
 
+[![Demo](thumbnail.png)](https://drive.google.com/file/d/1HSyuUk1cTeRgw5oAmY70d5sX72Ao2Fn3/view?usp=drive_link/preview)
 ---
 
 ## 설치
