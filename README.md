@@ -3,6 +3,8 @@
 강의 자료(PPT) 제작에 최적화된 가볍고 빠른 Windows DICOM 뷰어.
 단일 Python 파일(`dicom_viewer.py`)로 실행 가능합니다.
 
+![demo1](assets/final_part1.gif)
+
 ---
 
 ## 설치
