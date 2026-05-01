@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hwang Viewer for Radiologic Presentation
+Hwang Viewer for Radiologic Presentation — v2.1
 ==========================================
 설치: pip install pydicom pyqt6 numpy pylibjpeg
 
@@ -36,7 +36,7 @@ try:
         QToolBar, QToolButton, QMenu, QProgressBar,
         QListWidgetItem, QPushButton
     )
-    from PyQt6.QtCore import Qt, pyqtSignal, QSize, QEvent
+    from PyQt6.QtCore import Qt, pyqtSignal, QSize, QEvent, QRect, QPoint
     from PyQt6.QtGui import (
         QImage, QPixmap, QPainter, QPen, QColor,
         QFont, QPalette, QAction, QKeySequence, QCursor, QIcon
@@ -380,88 +380,30 @@ class DicomPanel(QWidget):
 
         result  = QPixmap(scaled)
         W, H    = result.width(), result.height()
-        painter = QPainter(result)
-        FONT    = QFont("Consolas", 8)
-        painter.setFont(FONT)
-        LH      = 13
-        M       = 5
 
-        def draw_text(x, y, text, right=False):
-            """황색 그림자 텍스트. right=True 이면 우측 정렬."""
-            if not text.strip():
-                return
-            rect = result.rect()
-            flags = Qt.AlignmentFlag.AlignTop
-            if right:
-                flags |= Qt.AlignmentFlag.AlignRight
-                rect.setRight(W - M + 1); rect.setTop(y + 1)
-                painter.setPen(QColor(0, 0, 0, 200))
-                painter.drawText(rect, flags, text)
-                rect.setRight(W - M);     rect.setTop(y)
-                painter.setPen(QColor(255, 255, 0))
-                painter.drawText(rect, flags, text)
-            else:
-                painter.setPen(QColor(0, 0, 0, 200))
-                painter.drawText(x + 1, y + 1, text)
-                painter.setPen(QColor(255, 255, 0))
-                painter.drawText(x, y, text)
-
-        # WL / WW / Zoom — 오버레이와 함께 토글 (T 키)
-        if self.show_tags:
-            wl_str = f"WL {self.wl:.0f}  WW {self.ww:.0f}   {self.zoom:.1f}×"
-            draw_text(M, H - 6, wl_str)
-
-        # DICOM 태그 오버레이
-        if self.show_tags and self.series:
-            ds = self._get_ds()
-            if ds is not None:
-                tl, tr, bl, br = build_overlay(ds, self.idx, len(self.series))
-
-                # 상단 좌
-                for i, line in enumerate(tl):
-                    draw_text(M, M + LH * i + LH, line)
-
-                # 상단 우
-                for i, line in enumerate(tr):
-                    draw_text(M, M + LH * i + LH, line, right=True)
-
-                # 하단 좌 (WL 줄 바로 위부터 역순)
-                base = H - 6 - LH
-                for i, line in enumerate(reversed(bl)):
-                    draw_text(M, base - LH * i, line)
-
-                # 하단 우
-                for i, line in enumerate(reversed(br)):
-                    draw_text(M, base - LH * i, line, right=True)
-
-        # ── Cross-reference 교차선 ───────────────────────────
+        # ── Cross-reference 교차선 (이미지에 묶인 요소만 — _disp_pix에 그림) ─
         if self._crosshair is not None:
+            painter = QPainter(result)
             row_f, col_f = self._crosshair
-            # 이미지 픽셀 → 표시 픽셀 변환
             ch_x = int(col_f * W / iw)
             ch_y = int(row_f * H / ih)
-            # 시안색 점선 십자선
             pen = QPen(QColor(0, 255, 255), 1)
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
-            painter.drawLine(0, ch_y, W, ch_y)   # 수평선
-            painter.drawLine(ch_x, 0, ch_x, H)   # 수직선
-            # 중심 원
+            painter.drawLine(0, ch_y, W, ch_y)
+            painter.drawLine(ch_x, 0, ch_x, H)
             painter.setPen(QPen(QColor(0, 255, 255), 2))
             painter.drawEllipse(ch_x - 6, ch_y - 6, 12, 12)
+            painter.end()
 
-        # 활성 패널 파란 테두리
-        if self._active:
-            painter.setPen(QPen(QColor(0, 160, 255), 3))
-            painter.drawRect(1, 1, W - 2, H - 2)
-
-        painter.end()
         self._disp_pix = result
         self.update()
         # _disp_pix 크기 변경 → letterbox 크기 변경 → ViewerGrid가 paint offset 재계산해야
         par = self.parent()
         if par is not None and hasattr(par, '_relayout_panels'):
             par._relayout_panels()
+
+    # _make_display 끝 위치 마커 — 텍스트/테두리는 paintEvent에서 그림
 
     def set_active(self, v):
         self._active = v
@@ -498,18 +440,112 @@ class DicomPanel(QWidget):
             y = ((self.height() - self._disp_pix.height()) // 2
                  + self._paint_offset_y + self._pan_offset_y)
             p.drawPixmap(x, y, self._disp_pix)
+
+            # ── clip 해제 후 letterbox 영역 위에 텍스트/테두리 오버레이 ──
+            # zoom과 무관하게 항상 letterbox 안 가장자리에 표시되도록 paintEvent에서 그림
+            p.setClipRect(cx, cy, base_w, base_h)   # 글자/테두리도 letterbox 영역만
+            self._paint_overlay(p, cx, cy, base_w, base_h)
+            p.setClipping(False)
         else:
             p.setPen(QColor(65, 65, 65))
             p.setFont(QFont("Arial", 11))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
                        f"Panel {self.panel_id + 1}\n\n시리즈 목록에서 더블클릭\n"
                        "또는 파일/폴더를 여기에 드롭")
-        if self._active and not self._disp_pix:
-            p.setPen(QPen(QColor(0, 160, 255), 3))
-            p.drawRect(1, 1, self.width() - 2, self.height() - 2)
+            if self._active:
+                p.setPen(QPen(QColor(0, 160, 255), 3))
+                p.drawRect(1, 1, self.width() - 2, self.height() - 2)
+
+    def _paint_overlay(self, painter, cx, cy, cw, ch):
+        """letterbox 영역 (cx,cy,cw,ch) 위에 DICOM 태그 텍스트 + 활성 테두리 그리기.
+        zoom의 영향을 받지 않아 항상 letterbox 가장자리에 위치."""
+        FONT = QFont("Consolas", 8)
+        painter.setFont(FONT)
+        LH = 13
+        M  = 5
+
+        def draw_text(x_local, y_local, text, right=False):
+            """letterbox 좌상단 기준 (x_local, y_local) 위치에 황색 그림자 텍스트.
+            right=True면 letterbox 우측 정렬."""
+            if not text or not text.strip():
+                return
+            if right:
+                # 우측 정렬용 rect = letterbox 영역
+                rect = QRect(cx, cy + y_local - LH + 2, cw - M, LH)
+                flags = (Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+                # 그림자
+                rect_s = QRect(cx + 1, cy + y_local - LH + 3, cw - M, LH)
+                painter.setPen(QColor(0, 0, 0, 200))
+                painter.drawText(rect_s, flags, text)
+                painter.setPen(QColor(255, 255, 0))
+                painter.drawText(rect, flags, text)
+            else:
+                ax = cx + x_local; ay = cy + y_local
+                painter.setPen(QColor(0, 0, 0, 200))
+                painter.drawText(ax + 1, ay + 1, text)
+                painter.setPen(QColor(255, 255, 0))
+                painter.drawText(ax, ay, text)
+
+        # WL / WW / Zoom (T 토글 대상)
+        if self.show_tags:
+            wl_str = f"WL {self.wl:.0f}  WW {self.ww:.0f}   {self.zoom:.1f}×"
+            draw_text(M, ch - 6, wl_str)
+
+        # DICOM 태그 4-corner 오버레이
+        if self.show_tags and self.series:
+            ds = self._get_ds()
+            if ds is not None:
+                tl, tr, bl, br = build_overlay(ds, self.idx, len(self.series))
+                # 상단 좌
+                for i, line in enumerate(tl):
+                    draw_text(M, M + LH * i + LH, line)
+                # 상단 우
+                for i, line in enumerate(tr):
+                    draw_text(M, M + LH * i + LH, line, right=True)
+                # 하단 좌 (WL 줄 위로)
+                base = ch - 6 - LH
+                for i, line in enumerate(reversed(bl)):
+                    draw_text(M, base - LH * i, line)
+                # 하단 우
+                for i, line in enumerate(reversed(br)):
+                    draw_text(M, base - LH * i, line, right=True)
+
+        # 활성 패널 파란 테두리 — letterbox 영역 가장자리에 (clip 안에 들어옴)
+        if self._active:
+            painter.setPen(QPen(QColor(0, 160, 255), 3))
+            painter.drawRect(cx + 1, cy + 1, cw - 2, ch - 2)
 
     # ── 마우스 ───────────────────────────────────────────────
     def mousePressEvent(self, event):
+        # 갭 줄임/오버랩 상태에서 z-order 기반으로 진짜 보이는 패널을 찾아 위임.
+        # QMouseEvent 재생성은 PyQt 버전 간 시그니처 차이로 위험 → 직접 상태만 셋업.
+        vg = self.parentWidget()
+        real = self
+        if vg is not None and hasattr(vg, '_panel_at_global'):
+            gx = self.x() + event.pos().x()
+            gy = self.y() + event.pos().y()
+            r = vg._panel_at_global(gx, gy)
+            if r is not None:
+                real = r
+
+        if real is not self:
+            # 활성 패널 전환 + 드래그 동안의 좌표 추적은 real이 담당
+            vg._activate(real)
+            real._last_pos   = QPoint(gx - real.x(), gy - real.y())
+            real._drag_accum = 0
+            real._drag_moved = False
+            real._gap_accum_x   = 0
+            real._gap_accum_y   = 0
+            real._gap_locked_ax = None
+            # 이후 mouse move/release는 grabMouse로 real이 받음
+            real.grabMouse()
+            # Panning 모드 + 좌클릭 → 닫힌 손
+            if (event.button() == Qt.MouseButton.LeftButton
+                    and getattr(self.window(), '_pan_mode', False)):
+                real.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+
         self._last_pos   = event.pos()
         self._drag_accum = 0
         self._drag_moved = False
@@ -536,11 +572,25 @@ class DicomPanel(QWidget):
             self.setCursor(Qt.CursorShape.OpenHandCursor)
         self._last_pos   = None
         self._drag_accum = 0
+        # mousePress에서 grabMouse를 했을 수 있음 — 안전하게 해제
+        if QApplication.mouseButtons() == Qt.MouseButton.NoButton:
+            try:
+                self.releaseMouse()
+            except Exception:
+                pass
 
     def mouseDoubleClickEvent(self, event):
         """패널 더블클릭 → Space 토글과 동일 (1×1 ↔ multi-panel)."""
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        # z-order 위 패널로 위임 (활성 패널을 그 패널로 만듦)
+        vg = self.parentWidget()
+        if vg is not None and hasattr(vg, '_panel_at_global'):
+            gx = self.x() + event.pos().x()
+            gy = self.y() + event.pos().y()
+            real = vg._panel_at_global(gx, gy)
+            if real is not None and real is not self:
+                vg._activate(real)
         win = self.window()
         if hasattr(win, '_toggle_panel_zoom'):
             win._toggle_panel_zoom()
@@ -561,15 +611,17 @@ class DicomPanel(QWidget):
         self.cross_clicked.emit(self, world)
 
     def _screen_to_image(self, sx, sy):
-        """화면 픽셀(sx,sy) → 이미지 픽셀(row_f, col_f). 범위 밖이면 None,None."""
+        """화면 픽셀(sx,sy) → 이미지 픽셀(row_f, col_f). 범위 밖이면 None,None.
+        zoom + paint_offset(갭) + pan_offset 모두 반영."""
         if self._raw_pix is None or self._disp_pix is None:
             return None, None
         iw = self._raw_pix.width()
         ih = self._raw_pix.height()
         dw = self._disp_pix.width()
         dh = self._disp_pix.height()
-        ox = (self.width()  - dw) // 2
-        oy = (self.height() - dh) // 2
+        # _disp_pix가 그려지는 widget 내 좌상단 — paintEvent와 동일 식
+        ox = (self.width()  - dw) // 2 + self._paint_offset_x + self._pan_offset_x
+        oy = (self.height() - dh) // 2 + self._paint_offset_y + self._pan_offset_y
         lx = sx - ox
         ly = sy - oy
         if lx < 0 or ly < 0 or lx >= dw or ly >= dh:
@@ -640,8 +692,17 @@ class DicomPanel(QWidget):
             # Panning 모드 (P 단축키 또는 툴바로 활성) → 영상 위치 이동
             win = self.window()
             if getattr(win, '_pan_mode', False):
-                self._pan_offset_x += dx
-                self._pan_offset_y += dy
+                # 후보 새 offset
+                new_x = self._pan_offset_x + dx
+                new_y = self._pan_offset_y + dy
+
+                # 자석 효과: 인접 패널의 이미지 가장자리에 8px 이내로 가까워지면 정확히 맞춤
+                vg = self.parentWidget()
+                if vg is not None and hasattr(vg, '_snap_to_neighbors'):
+                    new_x, new_y = vg._snap_to_neighbors(self, new_x, new_y, threshold=3)
+
+                self._pan_offset_x = new_x
+                self._pan_offset_y = new_y
                 self.update()
                 self._last_pos = event.pos()
                 return
@@ -679,8 +740,24 @@ class DicomPanel(QWidget):
             self._last_pos = event.pos()
 
     def wheelEvent(self, event):
-        delta = event.angleDelta().y()
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+        # 갭 줄임/오버랩 상태에서 z-order 위 패널이 진짜 사용자가 보는 것 → 그쪽으로 위임
+        vg = self.parentWidget()
+        if vg is not None and hasattr(vg, '_panel_at_global'):
+            pos = event.position()
+            gx = self.x() + pos.x()
+            gy = self.y() + pos.y()
+            real = vg._panel_at_global(int(gx), int(gy))
+            if real is not None and real is not self:
+                # QWheelEvent 재생성 대신 직접 처리 — 호환성/안정성 우선
+                real._handle_wheel(event.angleDelta().y(), event.modifiers())
+                event.accept()
+                return
+        self._handle_wheel(event.angleDelta().y(), event.modifiers())
+        event.accept()
+
+    def _handle_wheel(self, delta, modifiers):
+        """wheelEvent 본체 — 다른 패널에서 위임 호출도 가능하도록 분리."""
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
             # Ctrl+스크롤 → 확대/축소
             factor = 1.15 if delta > 0 else 1 / 1.15
             self.zoom = max(0.05, min(30.0, self.zoom * factor))
@@ -901,6 +978,101 @@ class ViewerGrid(QWidget):
         self._relayout_panels()
         return (0, 0)
 
+    def _panel_letterbox_global_rect(self, panel):
+        """패널의 letterbox(이미지가 실제 보이는 영역) 글로벌 좌표.
+        zoom과 무관 — 사용자가 화면에서 이미지 영역으로 인식하는 사각형.
+        hit-test (어떤 패널을 클릭했는가) 용."""
+        if not panel._disp_pix:
+            return None
+        zoom = max(0.001, float(panel.zoom))
+        base_w = int(round(panel._disp_pix.width()  / zoom))
+        base_h = int(round(panel._disp_pix.height() / zoom))
+        # paintEvent와 동일한 letterbox 좌상단 식 (pan_offset은 미적용)
+        local_x = (panel.width()  - base_w) // 2 + panel._paint_offset_x
+        local_y = (panel.height() - base_h) // 2 + panel._paint_offset_y
+        return (panel.x() + local_x, panel.y() + local_y, base_w, base_h)
+
+    def _panel_at_global(self, gx, gy):
+        """ViewerGrid 좌표 (gx, gy)에서 클릭/마우스 위치에 해당하는 패널 반환.
+
+        z-order(위에 그려진 패널이 화면에서도 위에 보임) 기준 — panels 리스트의 뒤에서
+        앞으로 검사하면서 letterbox에 들어가는 첫 패널을 반환. 사용자가 화면에서 본 이미지의
+        패널과 일치하는 동작.
+        """
+        # 뒤(위) → 앞(아래) 순회
+        for p in reversed(self.panels):
+            r = self._panel_letterbox_global_rect(p)
+            if r is None:
+                continue
+            x, y, w, h = r
+            if x <= gx < x + w and y <= gy < y + h:
+                return p
+        return None
+
+    def _panel_image_global_rect(self, panel, pan_x=None, pan_y=None):
+        """패널의 _disp_pix가 차지하는 글로벌(ViewerGrid) 좌표 사각형.
+        pan_x, pan_y가 주어지면 그 값으로, 아니면 panel._pan_offset_*로."""
+        if not panel._disp_pix:
+            return None
+        if pan_x is None:
+            pan_x = panel._pan_offset_x
+        if pan_y is None:
+            pan_y = panel._pan_offset_y
+        # 패널 widget 안에서 _disp_pix 그려지는 좌상단 (paint_offset + pan_offset)
+        local_x = ((panel.width()  - panel._disp_pix.width())  // 2
+                   + panel._paint_offset_x + pan_x)
+        local_y = ((panel.height() - panel._disp_pix.height()) // 2
+                   + panel._paint_offset_y + pan_y)
+        # 글로벌 좌표 = 패널 widget의 위치 + 로컬
+        gx = panel.x() + local_x
+        gy = panel.y() + local_y
+        return (gx, gy, panel._disp_pix.width(), panel._disp_pix.height())
+
+    def _snap_to_neighbors(self, active_panel, new_pan_x, new_pan_y, threshold=8):
+        """active_panel이 (new_pan_x, new_pan_y)로 panning할 때
+        인접 패널 이미지의 4개 가장자리(L/R/T/B)에 threshold 이내로 가까워지면 정확히 일치시킴.
+        반환: 보정된 (pan_x, pan_y)."""
+        rect_a = self._panel_image_global_rect(active_panel, new_pan_x, new_pan_y)
+        if rect_a is None:
+            return (new_pan_x, new_pan_y)
+        ax, ay, aw, ah = rect_a
+        a_left, a_right  = ax,         ax + aw
+        a_top,  a_bot    = ay,         ay + ah
+
+        # 후보 가장자리 모음
+        best_dx = None; best_x_dist = threshold + 1
+        best_dy = None; best_y_dist = threshold + 1
+
+        for p in self.panels:
+            if p is active_panel:
+                continue
+            r = self._panel_image_global_rect(p)
+            if r is None:
+                continue
+            bx, by, bw, bh = r
+            b_left, b_right = bx, bx + bw
+            b_top,  b_bot   = by, by + bh
+
+            # X 가장자리 매칭: active 좌↔이웃 좌, 좌↔우, 우↔좌, 우↔우
+            for ae, be in ((a_left, b_left), (a_left, b_right),
+                           (a_right, b_left), (a_right, b_right)):
+                d = be - ae   # 이웃 가장자리에 맞추려면 active를 d만큼 이동
+                if abs(d) <= threshold and abs(d) < best_x_dist:
+                    best_x_dist = abs(d)
+                    best_dx = d
+
+            # Y 가장자리 매칭
+            for ae, be in ((a_top, b_top), (a_top, b_bot),
+                           (a_bot, b_top), (a_bot, b_bot)):
+                d = be - ae
+                if abs(d) <= threshold and abs(d) < best_y_dist:
+                    best_y_dist = abs(d)
+                    best_dy = d
+
+        snapped_x = new_pan_x + (best_dx if best_dx is not None else 0)
+        snapped_y = new_pan_y + (best_dy if best_dy is not None else 0)
+        return (snapped_x, snapped_y)
+
     def _activate(self, panel):
         if self.active_panel and self.active_panel is not panel:
             self.active_panel.set_active(False)
@@ -1085,27 +1257,154 @@ class ViewerGrid(QWidget):
     def grab_active(self):
         if not self.active_panel:
             return None
-        # 캡처 전 파란 테두리 제거
-        self.active_panel._active = False
-        self.active_panel._make_display()
+        ap = self.active_panel
+        # 캡처 전 파란 테두리 + cross-hair 제거
+        ap._active = False
+        ch_backup = ap._crosshair
+        if ch_backup is not None:
+            ap._crosshair = None
+            if ap._raw_pix:
+                ap._make_display()
+        ap.repaint()
         QApplication.processEvents()
-        pix = self.active_panel.grab()
-        # 캡처 후 복원
-        self.active_panel._active = True
-        self.active_panel._make_display()
+        try:
+            pix = ap.grab()
+        finally:
+            # 복원
+            ap._active = True
+            if ch_backup is not None:
+                ap._crosshair = ch_backup
+                if ap._raw_pix:
+                    ap._make_display()
+            ap.update()
         return pix
 
     def grab_all(self):
-        # 전체 캡처도 테두리 없이
-        if self.active_panel:
-            self.active_panel._active = False
-            self.active_panel._make_display()
-            QApplication.processEvents()
-        pix = self.grab()
-        if self.active_panel:
-            self.active_panel._active = True
-            self.active_panel._make_display()
+        # 전체 캡처도 활성 테두리 + 모든 cross-hair 없이
+        ap = self.active_panel
+        was_active = False
+        if ap and ap._active:
+            was_active = True
+            ap._active = False
+            ap.update()
+
+        # 모든 패널의 crosshair 잠시 끄기 + 백업
+        ch_backup = []
+        for p in self.panels:
+            ch_backup.append((p, p._crosshair))
+            if p._crosshair is not None:
+                p._crosshair = None
+                if p._raw_pix:
+                    p._make_display()
+        # 강제 즉시 paint 처리
+        for p in self.panels:
+            p.repaint()
+        QApplication.processEvents()
+
+        try:
+            pix = self.grab()
+        finally:
+            if was_active and ap:
+                ap._active = True
+                ap.update()
+            for p, ch in ch_backup:
+                if ch is not None:
+                    p._crosshair = ch
+                    if p._raw_pix:
+                        p._make_display()
         return pix
+
+
+# ─────────────────────────────────────────────────────────────
+#  Copy Area 영역 선택 오버레이
+# ─────────────────────────────────────────────────────────────
+class _AreaSelector(QWidget):
+    """viewer_grid 위에 띄워서 사용자가 좌클릭 드래그로 직사각형 영역을 선택.
+    완료/취소 시 callback(rect) 호출. rect는 viewer_grid 좌표계의 QRect 또는 None(취소)."""
+    def __init__(self, target, callback):
+        super().__init__(target)
+        self.target   = target
+        self.callback = callback
+        self._start   = None
+        self._cur     = None
+        self.setGeometry(0, 0, target.width(), target.height())
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self._finish(cancel=True)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._start = event.pos()
+            self._cur   = event.pos()
+            self.update()
+
+    def mouseMoveEvent(self, event):
+        if self._start is not None:
+            self._cur = event.pos()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._start is None:
+            return
+        self._cur = event.pos()
+        self._finish(cancel=False)
+
+    def _finish(self, cancel):
+        # 콜백 전에 selector를 먼저 숨김 — callback 안에서 grab을 호출하면
+        # selector overlay가 결과에 포함되어 어두운 사각형/외곽선이 캡처되는 걸 방지
+        self.hide()
+        QApplication.processEvents()
+        if cancel or self._start is None or self._cur is None:
+            self.callback(None)
+        else:
+            x1, y1 = self._start.x(), self._start.y()
+            x2, y2 = self._cur.x(),   self._cur.y()
+            rect = QRect(min(x1, x2), min(y1, y2),
+                         abs(x2 - x1), abs(y2 - y1))
+            self.callback(rect)
+        self.deleteLater()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        # 화면 전체 어두운 오버레이 (선택 영역 제외)
+        if self._start is not None and self._cur is not None:
+            x1, y1 = self._start.x(), self._start.y()
+            x2, y2 = self._cur.x(),   self._cur.y()
+            sel = QRect(min(x1, x2), min(y1, y2),
+                        abs(x2 - x1), abs(y2 - y1))
+            # 4 영역 어둡게
+            dark = QColor(0, 0, 0, 128)
+            p.fillRect(0, 0, self.width(), sel.top(), dark)            # 위
+            p.fillRect(0, sel.bottom() + 1,
+                       self.width(), self.height() - sel.bottom() - 1, dark)  # 아래
+            p.fillRect(0, sel.top(),
+                       sel.left(), sel.height() + 1, dark)             # 좌
+            p.fillRect(sel.right() + 1, sel.top(),
+                       self.width() - sel.right() - 1, sel.height() + 1, dark)  # 우
+            # 선택 사각형 외곽선
+            pen = QPen(QColor(0, 200, 255), 2)
+            p.setPen(pen)
+            p.drawRect(sel)
+            # 우상단에 크기 표시
+            label = f"{sel.width()} × {sel.height()}"
+            p.setFont(QFont("Consolas", 11))
+            p.fillRect(sel.left(), sel.top() - 22,
+                       len(label) * 9 + 12, 20, QColor(0, 0, 0, 200))
+            p.setPen(QColor(0, 200, 255))
+            p.drawText(sel.left() + 6, sel.top() - 7, label)
+        else:
+            # 시작 전: 전체 살짝 어둡게 + 안내 메시지
+            p.fillRect(self.rect(), QColor(0, 0, 0, 60))
+            p.setPen(QColor(0, 200, 255))
+            p.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                       "✂️  영역을 좌클릭 드래그로 선택하세요  (Esc 취소)")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1240,7 +1539,7 @@ class SeriesSidebar(QWidget):
 class DicomViewer(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Hwang Viewer for Radiologic Presentation")
+        self.setWindowTitle("Hwang Viewer for Radiologic Presentation v2.1")
         self.setAcceptDrops(True)
         self._series_list = []
         self._series_page = 0      # 현재 페이지 (0-based)
@@ -1310,8 +1609,9 @@ class DicomViewer(QMainWindow):
         self._act(fm, "Quit", "Ctrl+Q", self.close)
 
         em = mb.addMenu("Edit")
-        self._act(em, "📋  Copy image",   "Ctrl+C",       self.copy_active)
-        self._act(em, "🗂️  Copy screen",  "Ctrl+Shift+C", self.copy_all)
+        self._act(em, "📋  Copy Image",   "Ctrl+C",       self.copy_active)
+        self._act(em, "🗂️  Copy Screen",  "Ctrl+Shift+C", self.copy_all)
+        self._act(em, "✂️  Copy Area...", "Ctrl+Alt+C",   self.copy_area)
 
         vm = mb.addMenu("View")
         # ── Layout 서브메뉴 (1×1 ~ 3×3 9종) ───────────────
@@ -1329,13 +1629,13 @@ class DicomViewer(QMainWindow):
         self._act(lm, "3 × 3",  "Ctrl+3", lambda: self._change_layout('3x3'))
         vm.addSeparator()
         self._act(vm, "🏷️  Tag Overlay ON/OFF",        "T",      self._toggle_tags)
-        self._act(vm, "↺  Reset W/L & Zoom & Pan",      "R",      self._reset_active)
+        self._act(vm, "↺  Reset W/L",                   "R",      self._reset_active)
         self._act(vm, "⛶  Toggle 1×1 ↔ Multi  (Space)", "Space",  self._toggle_panel_zoom)
         self._act(vm, "✛  Cross-reference ON/OFF",      "X",      self._toggle_cross_link)
         self._act(vm, "✋  Panning ON/OFF",              "P",      self._toggle_pan_mode)
         vm.addSeparator()
         self._act(vm, "⇔  이미지 이동 설정...",          "",       self.set_image_offset_dialog)
-        self._act(vm, "↺  이미지 이동 리셋",             "Ctrl+G", self.reset_image_offset)
+        self._act(vm, "↺  Reset Position",             "Ctrl+G", self.reset_image_offset)
         vm.addSeparator()
         self._act(vm, "⊞  Fill Grid with Series", "", self._fill_grid_with_series)
 
@@ -1460,13 +1760,14 @@ class DicomViewer(QMainWindow):
         tb.addSeparator()
 
         tbtn("🏷️ Tags",    self._toggle_tags)
-        tbtn("↺ Reset WL",  self._reset_active)
-        tbtn("↺ Reset Gap", self.reset_image_offset)
+        tbtn("↺ Reset W/L",  self._reset_active)
+        tbtn("↺ Reset Position", self.reset_image_offset)
         tbtn("✛ Cross-ref", self._toggle_cross_link)
         tbtn("✋ Panning",   self._toggle_pan_mode)
         tb.addSeparator()
-        tbtn("📋 Copy image",   self.copy_active)
-        tbtn("🗂️ Copy screen",  self.copy_all)
+        tbtn("📋 Copy Image",   self.copy_active)
+        tbtn("🗂️ Copy Screen",  self.copy_all)
+        tbtn("✂️ Copy Area",    self.copy_area)
         tbtn("💾 Save",         self.save_active)
 
     def _page_size(self):
@@ -1773,8 +2074,9 @@ class DicomViewer(QMainWindow):
 
 <h3>📋 Clipboard</h3>
 <table cellpadding='4'>
-<tr><td><b>Ctrl+C</b></td><td>활성 패널 복사</td></tr>
-<tr><td><b>Ctrl+Shift+C</b></td><td>전체 패널 복사 (PPT용)<br><span style='color:#888;'>활성 테두리·사이드바·툴바 자동 제외</span></td></tr>
+<tr><td><b>Ctrl+C</b></td><td>활성 패널 복사 (Copy Image)</td></tr>
+<tr><td><b>Ctrl+Shift+C</b></td><td>전체 화면 복사 (Copy Screen)<br><span style='color:#888;'>활성 테두리·사이드바·툴바 자동 제외</span></td></tr>
+<tr><td><b>Ctrl+Alt+C</b></td><td>영역 선택 복사 (Copy Area)<br><span style='color:#888;'>드래그로 사각형 선택, Esc 취소</span></td></tr>
 </table>
 
 <h3>⇔ 이미지 이동 (PPT 캡처용 — 오버랩 허용)</h3>
@@ -1784,7 +2086,7 @@ class DicomViewer(QMainWindow):
 오른쪽/아래 = 안쪽 (오버랩)<br>
 왼쪽/위 = 바깥쪽 (갭 증가)<br>
 부드럽게: 마우스 4px 당 1px 이동</span></td></tr>
-<tr><td><b>Ctrl+G</b></td><td>이동 리셋 (격자 정렬)</td></tr>
+<tr><td><b>Ctrl+G</b></td><td>Reset Position — Gap / Zoom / Pan / W/L 모두 리셋</td></tr>
 <tr><td colspan='2' style='color:#888;'>수동 입력 (다른 환자 재사용): View → 이미지 이동 설정...</td></tr>
 </table>
 
@@ -1800,7 +2102,8 @@ class DicomViewer(QMainWindow):
 <h3>🖼️ Display</h3>
 <table cellpadding='4'>
 <tr><td><b>T</b></td><td>DICOM 태그 오버레이 ON/OFF<br>(WL/WW 정보 포함)</td></tr>
-<tr><td><b>R</b></td><td>W/L &amp; Zoom &amp; Pan 리셋</td></tr>
+<tr><td><b>R</b></td><td>활성 패널 W/L 리셋 (zoom/pan은 유지)</td></tr>
+<tr><td><b>Ctrl+G</b></td><td>Reset Position — 모든 패널의 Gap / Zoom / Pan / W/L 리셋</td></tr>
 <tr><td><b>X</b></td><td>Cross-reference ON/OFF</td></tr>
 <tr><td><b>P</b></td><td>Panning ON/OFF<br><span style='color:#888;'>좌클릭 드래그가 영상 이동이 됨<br>줌이나 갭 줄임 후 영상 위치 조정용</span></td></tr>
 </table>
@@ -1835,6 +2138,7 @@ class DicomViewer(QMainWindow):
             self,
             "About",
             "<h2>Hwang Viewer for Radiologic Presentation</h2>"
+            "<p><b>v2.1</b></p>"
             "<p>강의 자료(PPT) 제작을 위한 가볍고 빠른 DICOM 뷰어</p>"
             "<p>© 2026 Sungil Hwang (황성일)<br>"
             "Department of Radiology<br>"
@@ -1874,13 +2178,12 @@ class DicomViewer(QMainWindow):
                 self.statusBar().showMessage("🔍  1×1 확대  |  Space: 복원")
 
     def _reset_active(self):
+        """활성 패널의 W/L만 리셋. zoom과 pan은 유지 (Reset Position이 따로 담당)."""
         p = self.viewer_grid.active_panel
         if p and p.series:
-            p.zoom = 1.0
             p._auto_wl()
-            p._pan_offset_x = 0
-            p._pan_offset_y = 0
             p._render()
+            self.statusBar().showMessage("↺  W/L 리셋")
 
     # ── Panning 모드 (P) ─────────────────────────────────────
     def _toggle_pan_mode(self):
@@ -1911,6 +2214,71 @@ class DicomViewer(QMainWindow):
         if pix:
             QApplication.clipboard().setPixmap(pix)
             self.statusBar().showMessage("✓  전체 패널 클립보드 복사 완료")
+
+    def copy_area(self):
+        """사용자가 viewer_grid 위에 사각형을 그려서 그 영역만 캡처."""
+        # 활성 패널 파란 테두리 + 모든 패널의 cross-hair 일시 제거
+        active = self.viewer_grid.active_panel
+        was_active = False
+        if active and active._active:
+            was_active = True
+            active._active = False
+            active.update()
+
+        # 모든 패널의 crosshair 잠시 끄기 (각 패널 별 backup)
+        crosshair_backup = []
+        for p in self.viewer_grid.panels:
+            crosshair_backup.append((p, p._crosshair))
+            if p._crosshair is not None:
+                p._crosshair = None
+                if p._raw_pix:
+                    p._make_display()   # crosshair는 _disp_pix에 그려지므로 재생성 필요
+        QApplication.processEvents()
+
+        def on_done(rect):
+            try:
+                if rect is None or rect.width() < 4 or rect.height() < 4:
+                    self.statusBar().showMessage("✂️  영역 캡처 취소")
+                    return
+                # 캡처 직전 — paint가 확실히 끝난 상태로 보장
+                if active is not None:
+                    active.repaint()
+                for p, _ch in crosshair_backup:
+                    p.repaint()
+                QApplication.processEvents()
+
+                full = self.viewer_grid.grab()
+                # HiDPI 보정
+                dpr_x = full.width()  / max(1, self.viewer_grid.width())
+                dpr_y = full.height() / max(1, self.viewer_grid.height())
+                scaled = QRect(
+                    int(round(rect.x()      * dpr_x)),
+                    int(round(rect.y()      * dpr_y)),
+                    int(round(rect.width()  * dpr_x)),
+                    int(round(rect.height() * dpr_y)),
+                )
+                cropped = full.copy(scaled)
+                QApplication.clipboard().setPixmap(cropped)
+                self.statusBar().showMessage(
+                    f"✓  영역 캡처 완료  —  {cropped.width()}×{cropped.height()}px  "
+                    f"|  PowerPoint에 Ctrl+V"
+                )
+            finally:
+                # 활성 테두리 복원
+                if was_active and active:
+                    active._active = True
+                    active.update()
+                # crosshair 복원
+                for p, ch in crosshair_backup:
+                    if ch is not None:
+                        p._crosshair = ch
+                        if p._raw_pix:
+                            p._make_display()
+
+        sel = _AreaSelector(self.viewer_grid, on_done)
+        sel.show()
+        sel.raise_()
+        sel.setFocus()
 
     # ── 패널 이미지 이동 (PPT 캡처용 — 갭 조절 + 오버랩) ────
     def _adjust_image_offset_delta(self, dx, dy):
@@ -1953,8 +2321,20 @@ class DicomViewer(QMainWindow):
         )
 
     def reset_image_offset(self):
+        """모든 위치 관련 상태 리셋: 갭, 패널 이동, 모든 패널의 zoom + pan + W/L."""
         self.viewer_grid.reset_image_offset()
-        self.statusBar().showMessage("↺  이미지 이동 리셋 (격자 정렬)")
+        for p in self.viewer_grid.panels:
+            if p.series:
+                p.zoom = 1.0
+                p._auto_wl()
+                p._pan_offset_x = 0
+                p._pan_offset_y = 0
+                p._render()
+            else:
+                p._pan_offset_x = 0
+                p._pan_offset_y = 0
+                p.update()
+        self.statusBar().showMessage("↺  Position 리셋  —  Gap / Zoom / Pan / W/L 초기화")
 
     def save_active(self):
         path, _ = QFileDialog.getSaveFileName(
