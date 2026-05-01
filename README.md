@@ -1,6 +1,7 @@
 # Hwang Viewer for Radiologic Presentation — v2.1
 
 강의 자료(PPT) 제작에 최적화된 가볍고 빠른 Windows DICOM 뷰어.
+레이아웃 자유, 갭줄이기, 확대, 축소, cross-link 가능하고, 전체화면 캡쳐, 선택화면 캡쳐 모두 가능하고 클립보드에 붙습니다.
 단일 Python 파일(`dicom_viewer.py`)로 실행 가능합니다.
 
 ![demo1](assets/final_part1.gif)
