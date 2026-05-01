@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM   Hwang Viewer for Radiologic Presentation
+REM   Hwang Viewer for Radiologic Presentation v2.1
 REM   Windows EXE Build Script
 REM ============================================================
 
@@ -8,7 +8,7 @@ setlocal
 
 echo.
 echo ============================================================
-echo   Hwang Viewer EXE Build - Start
+echo   Hwang Viewer v2.1 EXE Build - Start
 echo ============================================================
 echo.
 
