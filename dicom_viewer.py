@@ -17,18 +17,34 @@ Hwang Viewer for Radiologic Presentation — v3.0
 """
 
 import sys
+import os
 import re
 import json
+import time
+import multiprocessing
 import numpy as np
 from pathlib import Path
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 try:
     import pydicom
     PYDICOM_OK = True
 except ImportError:
     PYDICOM_OK = False
+
+
+def _read_dicom_header(path_str: str):
+    """ProcessPoolExecutor 워커 — pickle을 위해 반드시 top-level 함수여야 함."""
+    try:
+        ds = pydicom.dcmread(path_str, stop_before_pixels=True, force=True)
+        _ = str(getattr(ds, 'SeriesInstanceUID', None) or '')
+        return (path_str, ds)
+    except Exception:
+        return None
+
+
+_header_cache: dict = {}  # {폴더 절대경로: (파일수, [(Path, ds), ...])}
 
 try:
     from PyQt6.QtWidgets import (
@@ -3433,31 +3449,46 @@ class DicomViewer(QMainWindow):
         self._progress_show("Header scan", 0, total)
         self.statusBar().showMessage(tr('status_header_scan').format(total=total))
 
-        # ── 1단계: 헤더만 병렬로 빠르게 읽기 ───────────────────
-        file_headers = []   # [(Path, ds_header)]
+        _t_start = time.perf_counter()  # ⏱ TIMER: 전체 시작
 
-        def read_header(fpath):
-            try:
-                ds = pydicom.dcmread(str(fpath),
-                                     stop_before_pixels=True,
-                                     force=True)
-                # SeriesInstanceUID 없으면 스킵
-                _ = str(getattr(ds, 'SeriesInstanceUID', None) or '')
-                return (fpath, ds)
-            except Exception:
-                return None
+        # ── 1단계: 헤더 병렬 읽기 (캐시 우선) ──────────────────
+        _t0       = time.perf_counter()  # ⏱ TIMER: 헤더 스캔 시작
+        file_headers: list = []
+        cache_key = str(p.resolve()) if p.is_dir() else None
+        cache_hit = False
 
-        done = 0
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            futures = {ex.submit(read_header, f): f for f in candidates}
-            for fut in as_completed(futures):
-                result = fut.result()
-                if result:
-                    file_headers.append(result)
-                done += 1
-                # progress bar 갱신 (10개 단위 또는 마지막)
-                if done % 10 == 0 or done == total:
-                    self._progress_show("Header scan", done, total)
+        if cache_key and cache_key in _header_cache:
+            cached_n, cached_headers = _header_cache[cache_key]
+            if cached_n == total:
+                file_headers = list(cached_headers)
+                cache_hit    = True
+            else:
+                del _header_cache[cache_key]   # 파일 수 변경 → 캐시 무효화
+
+        if not file_headers:
+            done      = 0
+            n_workers = max(2, os.cpu_count() or 4)
+            with ProcessPoolExecutor(max_workers=n_workers) as ex:
+                futures = {ex.submit(_read_dicom_header, str(f)): f
+                           for f in candidates}
+                for fut in as_completed(futures):
+                    try:
+                        result = fut.result()
+                        if result:
+                            path_str, ds = result
+                            file_headers.append((Path(path_str), ds))
+                    except Exception:
+                        pass
+                    done += 1
+                    if done % 10 == 0 or done == total:
+                        self._progress_show("Header scan", done, total)
+            if cache_key and file_headers:
+                _header_cache[cache_key] = (total, list(file_headers))
+
+        _t1 = time.perf_counter()  # ⏱ TIMER: 헤더 스캔 종료
+        print(f"[TIMER] 1단계 헤더 스캔:    {_t1-_t0:.3f}s  "
+              f"({total}파일, {len(file_headers)}성공)"
+              + (" [캐시 히트]" if cache_hit else ""))
 
         if not file_headers:
             self._progress_hide()
@@ -3466,6 +3497,7 @@ class DicomViewer(QMainWindow):
             return
 
         # ── 2단계: SeriesInstanceUID 기준 그룹핑 ────────────────
+        _t0 = time.perf_counter()  # ⏱ TIMER: 그룹핑 시작
         series_dict: dict = {}
         for fpath, ds in file_headers:
             uid = str(getattr(ds, 'SeriesInstanceUID', 'unknown'))
@@ -3489,8 +3521,11 @@ class DicomViewer(QMainWindow):
         self._series_list.sort(
             key=lambda x: _tag(x[1][0][1], 'SeriesNumber', '9999').zfill(6)
         )
+        _t1 = time.perf_counter()  # ⏱ TIMER: 그룹핑 종료
+        print(f"[TIMER] 2단계 그룹핑:        {_t1-_t0:.3f}s  ({len(self._series_list)}개 시리즈)")
 
         # ── 3단계: 시리즈별 썸네일 생성 (가운데 슬라이스) ──────
+        _t0 = time.perf_counter()  # ⏱ TIMER: 썸네일 시작
         n_series = len(self._series_list)
         self._progress_show("Thumbnails", 0, n_series)
         self.statusBar().showMessage(tr('status_thumbnails').format(n=n_series))
@@ -3498,12 +3533,16 @@ class DicomViewer(QMainWindow):
         for i, (label, pairs) in enumerate(self._series_list):
             thumbs.append(self._make_thumbnail(pairs))
             self._progress_show("Thumbnails", i + 1, n_series)
+        _t1 = time.perf_counter()  # ⏱ TIMER: 썸네일 종료
+        print(f"[TIMER] 3단계 썸네일 생성:  {_t1-_t0:.3f}s  ({n_series}개 시리즈, 평균 {((_t1-_t0)/max(1,n_series)):.3f}s/시리즈)")
 
         # 사이드바
         self.sidebar.set_study(file_headers[0][1])
         self.sidebar.populate(self._series_list, thumbs)
         self._series_page = 0
 
+        # ── 4단계: 첫 이미지 패널 로드 ─────────────────────────
+        _t0 = time.perf_counter()  # ⏱ TIMER: 이미지 로드 시작
         n = len(self._series_list)
         if n == 1:
             self.viewer_grid.set_layout('1x1')
@@ -3519,6 +3558,11 @@ class DicomViewer(QMainWindow):
             placed = min(n, ps)
             msg = tr('status_multi_series').format(
                 n=len(file_headers), s=n, p=placed, mode=self.viewer_grid._mode)
+        _t1 = time.perf_counter()  # ⏱ TIMER: 이미지 로드 종료
+        print(f"[TIMER] 4단계 이미지 패널 로드: {_t1-_t0:.3f}s")
+
+        print(f"[TIMER] ─────────────────────────────────────────")
+        print(f"[TIMER] 전체 로딩:           {_t1-_t_start:.3f}s  (총 {total}파일, {len(self._series_list)}시리즈)")
 
         self._update_page_label()
         self._progress_hide()
@@ -3922,4 +3966,5 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()  # PyInstaller EXE에서 서브프로세스 spawn 허용
     main()
