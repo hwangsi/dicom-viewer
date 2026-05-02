@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hwang Viewer for Radiologic Presentation — v3.0
+Hwang Viewer for Radiologic Presentation — v3.1
 ==========================================
 설치: pip install pydicom pyqt6 numpy pylibjpeg
 
@@ -3008,7 +3008,7 @@ class SeriesSidebar(QWidget):
 class DicomViewer(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Hwang Viewer for Radiologic Presentation v3.0")
+        self.setWindowTitle("Hwang Viewer for Radiologic Presentation v3.1")
         self.setAcceptDrops(True)
         self._series_list = []
         self._series_page = 0      # 현재 페이지 (0-based)
@@ -3708,7 +3708,7 @@ class DicomViewer(QMainWindow):
             self,
             "About",
             "<h2>Hwang Viewer for Radiologic Presentation</h2>"
-            "<p><b>v3.0</b></p>"
+            "<p><b>v3.1</b></p>"
             f"<p>{tr('about_desc')}</p>"
             "<p>© 2026 Sungil Hwang (황성일)<br>"
             "Department of Radiology<br>"
