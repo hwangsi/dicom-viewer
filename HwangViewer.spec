@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# Hwang Viewer for Radiologic Presentation v2.1
-# Build: pyinstaller HwangViewer.spec
+# Hwang Viewer for Radiologic Presentation v3.0
+# Build: python -m PyInstaller HwangViewer.spec
 # Output: dist/HwangViewer.exe (~60-80 MB, Python not required)
 #
 

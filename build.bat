@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM   Hwang Viewer for Radiologic Presentation v2.1
+REM   Hwang Viewer for Radiologic Presentation v3.0
 REM   Windows EXE Build Script
 REM ============================================================
 
@@ -8,7 +8,7 @@ setlocal
 
 echo.
 echo ============================================================
-echo   Hwang Viewer v2.1 EXE Build - Start
+echo   Hwang Viewer v3.0 EXE Build - Start
 echo ============================================================
 echo.
 
@@ -26,7 +26,7 @@ if exist dist  rmdir /s /q dist
 REM [3/3] Run PyInstaller
 echo.
 echo [3/3] Running PyInstaller (this takes 2-3 minutes)...
-pyinstaller HwangViewer.spec --noconfirm
+python -m PyInstaller HwangViewer.spec --noconfirm
 
 echo.
 if exist dist\HwangViewer.exe (
