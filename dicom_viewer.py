@@ -3211,6 +3211,7 @@ class DicomViewer(QMainWindow):
 
     def _build_toolbar(self):
         p = self._toolbar_params()
+        self._tb_single_row = False  # 2-row initial state (addToolBarBreak below)
 
         # ── Row 1: File / Layout / Series navigation ─────────────
         tb1 = QToolBar("Row 1", self)
@@ -3342,6 +3343,31 @@ class DicomViewer(QMainWindow):
             self._page_label.setStyleSheet(
                 f"color:#aaa; font-size:{p['font_px']}px; padding:0 {p['pad_h'] // 2}px;"
             )
+        self._update_toolbar_layout()
+
+    def _update_toolbar_layout(self):
+        """Switch between 1-row and 2-row toolbar based on current window width.
+
+        Measures each toolbar's sizeHint individually (both in 2-row state),
+        sums them as the width needed for a single row, then inserts or removes
+        the row break before _toolbar2 accordingly.
+        """
+        if not hasattr(self, '_toolbar1') or not hasattr(self, '_toolbar2'):
+            return
+        needed = (self._toolbar1.sizeHint().width()
+                  + self._toolbar2.sizeHint().width() + 16)
+        want_single = self.width() >= needed
+        if want_single == self._tb_single_row:
+            return
+        self._tb_single_row = want_single
+        if want_single:
+            self.removeToolBarBreak(self._toolbar2)
+        else:
+            self.insertToolBarBreak(self._toolbar2)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_toolbar_layout()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -3349,6 +3375,7 @@ class DicomViewer(QMainWindow):
         if win is not None and not getattr(self, '_screen_signal_connected', False):
             win.screenChanged.connect(self._on_screen_changed)
             self._screen_signal_connected = True
+        self._update_toolbar_layout()
 
     def _on_screen_changed(self, _screen):
         self._apply_toolbar_scale()
