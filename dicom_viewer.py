@@ -3121,9 +3121,13 @@ class DicomViewer(QMainWindow):
     def _show_layout_picker(self):
         picker = _LayoutPicker(self)
         picker.layout_selected.connect(self._change_layout)
-        btn = self._layout_btn
-        pos = btn.mapToGlobal(QPoint(0, btn.height()))
-        picker.move(pos)
+        for tb in (self._toolbar1, self._toolbar2):
+            w = tb.widgetForAction(self._layout_action)
+            if w is not None:
+                picker.move(w.mapToGlobal(QPoint(0, w.height())))
+                break
+        else:
+            picker.move(QCursor.pos())
         picker.show()
 
     def _switch_lang(self, lang):
@@ -3211,60 +3215,71 @@ class DicomViewer(QMainWindow):
 
     def _build_toolbar(self):
         p = self._toolbar_params()
-        self._tb_single_row = False  # 2-row initial state (addToolBarBreak below)
+        self._tb_has_break     = True   # break exists between tb1/tb2 initially
+        self._tb_widths_stale  = True   # widths need measuring on first layout call
 
-        # ── Row 1: File / Layout / Series navigation ─────────────
+        # ── Two toolbar rows (content distributed dynamically) ────
         tb1 = QToolBar("Row 1", self)
         tb1.setMovable(False)
         tb1.setIconSize(QSize(p['icon_sz'], p['icon_sz']))
         self.addToolBar(tb1)
         self._toolbar1 = tb1
 
-        def tbtn1(label, slot):
-            a = QAction(label, self); a.triggered.connect(slot); tb1.addAction(a)
-
-        tbtn1("📂 File",     self.open_file)
-        tbtn1("📁 Folder",   self.open_folder)
-        tb1.addSeparator()
-
-        self._layout_btn = QToolButton(self)
-        self._layout_btn.setText("⊞ Layout ▾")
-        self._layout_btn.clicked.connect(self._show_layout_picker)
-        tb1.addWidget(self._layout_btn)
-        tbtn1("⊞ Fill", self._fill_grid_with_series)
-        tb1.addSeparator()
-
-        self._page_label = QLabel("  Series  -  ")
-        self._page_label.setStyleSheet(
-            f"color:#aaa; font-size:{p['font_px']}px; padding:0 {p['pad_h'] // 2}px;"
-        )
-        tb1.addWidget(self._page_label)
-        tbtn1("◀", self._series_prev_page)
-        tbtn1("▶", self._series_next_page)
-
-        # ── Row 2: View modes / Capture ───────────────────────────
         self.addToolBarBreak()
+
         tb2 = QToolBar("Row 2", self)
         tb2.setMovable(False)
         tb2.setIconSize(QSize(p['icon_sz'], p['icon_sz']))
         self.addToolBar(tb2)
         self._toolbar2 = tb2
 
-        def tbtn2(label, slot):
-            a = QAction(label, self); a.triggered.connect(slot); tb2.addAction(a)
+        # ── helpers ───────────────────────────────────────────────
+        def act(label, slot=None):
+            a = QAction(label, self)
+            if slot:
+                a.triggered.connect(slot)
+            return a
 
-        tbtn2("🏷️ Tags",        self._toggle_tags)
-        tbtn2("↺ W/L",          self._reset_active)
-        tbtn2("↺ Position",     self.reset_image_offset)
-        tbtn2("✛ Cross-ref",    self._toggle_cross_link)
-        tbtn2("✋ Panning",      self._toggle_pan_mode)
-        tb2.addSeparator()
-        tbtn2("📋 Copy Image",   self.copy_active)
-        tbtn2("🗂️ Copy Screen",  self.copy_all)
-        tbtn2("✂️ Copy Area",    self.copy_area)
-        tb2.addSeparator()
-        tbtn2("💾 Save Image",   self.save_active)
-        tbtn2("💾 Save Screen",  self.save_all)
+        def sep():
+            a = QAction(self)
+            a.setSeparator(True)
+            return a
+
+        # ── Layout action (replaces QToolButton; position resolved via widgetForAction) ──
+        self._layout_action = act("⊞ Layout ▾", self._show_layout_picker)
+
+        # ── Page label action (replaces QLabel; dim-styled after each redistribution) ──
+        self._page_action = act("  Series  -  ")
+
+        # ── Flat ordered list of ALL toolbar items ────────────────
+        self._all_tb_actions = [
+            act("📂 File",         self.open_file),
+            act("📁 Folder",       self.open_folder),
+            sep(),
+            self._layout_action,
+            act("⊞ Fill",          self._fill_grid_with_series),
+            sep(),
+            self._page_action,
+            act("◀",               self._series_prev_page),
+            act("▶",               self._series_next_page),
+            sep(),
+            act("🏷️ Tags",         self._toggle_tags),
+            act("↺ W/L",           self._reset_active),
+            act("↺ Position",      self.reset_image_offset),
+            act("✛ Cross-ref",     self._toggle_cross_link),
+            act("✋ Panning",       self._toggle_pan_mode),
+            sep(),
+            act("📋 Copy Image",   self.copy_active),
+            act("🗂️ Copy Screen",  self.copy_all),
+            act("✂️ Copy Area",    self.copy_area),
+            sep(),
+            act("💾 Save Image",   self.save_active),
+            act("💾 Save Screen",  self.save_all),
+        ]
+
+        # ── Load all into tb1 initially; _update_toolbar_layout redistributes ──
+        for a in self._all_tb_actions:
+            tb1.addAction(a)
 
     # ── DPI-adaptive toolbar scaling ────────────────────────────
 
@@ -3339,31 +3354,77 @@ class DicomViewer(QMainWindow):
         for attr in ('_toolbar1', '_toolbar2'):
             if hasattr(self, attr):
                 getattr(self, attr).setIconSize(QSize(p['icon_sz'], p['icon_sz']))
-        if hasattr(self, '_page_label'):
-            self._page_label.setStyleSheet(
-                f"color:#aaa; font-size:{p['font_px']}px; padding:0 {p['pad_h'] // 2}px;"
-            )
+        self._tb_widths_stale = True  # button sizes changed — re-measure on next layout
         self._update_toolbar_layout()
 
     def _update_toolbar_layout(self):
-        """Switch between 1-row and 2-row toolbar based on current window width.
+        """Distribute toolbar actions across rows to fill width naturally.
 
-        Measures each toolbar's sizeHint individually (both in 2-row state),
-        sums them as the width needed for a single row, then inserts or removes
-        the row break before _toolbar2 accordingly.
+        Puts actions into row 1 until self.width() is exceeded, then
+        overflows to row 2.  Separators are never left dangling at the
+        start or end of a row.  On DPI change (_tb_widths_stale=True) all
+        button widths are re-measured by temporarily loading them into tb1.
         """
-        if not hasattr(self, '_toolbar1') or not hasattr(self, '_toolbar2'):
+        if not hasattr(self, '_all_tb_actions') or not hasattr(self, '_toolbar1'):
             return
-        needed = (self._toolbar1.sizeHint().width()
-                  + self._toolbar2.sizeHint().width() + 16)
-        want_single = self.width() >= needed
-        if want_single == self._tb_single_row:
-            return
-        self._tb_single_row = want_single
-        if want_single:
-            self.removeToolBarBreak(self._toolbar2)
-        else:
-            self.insertToolBarBreak(self._toolbar2)
+
+        actions = self._all_tb_actions
+
+        # ── (Re-)measure button widths when DPI changes ───────────
+        if getattr(self, '_tb_widths_stale', True):
+            self._toolbar1.clear()
+            self._toolbar2.clear()
+            for a in actions:
+                self._toolbar1.addAction(a)
+            self._tb_widths = [
+                (self._toolbar1.widgetForAction(a).sizeHint().width()
+                 if self._toolbar1.widgetForAction(a) else 0)
+                for a in actions
+            ]
+            self._tb_widths_stale = False
+
+        # ── Find split: fill row 1 until width exceeded ───────────
+        available  = self.width()
+        cumulative = 0
+        split      = len(actions)          # default: everything in row 1
+        for i, w in enumerate(self._tb_widths):
+            cumulative += w
+            if cumulative > available:
+                split = i
+                break
+
+        # Trim trailing separators from row 1
+        while split > 0 and actions[split - 1].isSeparator():
+            split -= 1
+
+        # Skip leading separators for row 2
+        row2_start = split
+        while row2_start < len(actions) and actions[row2_start].isSeparator():
+            row2_start += 1
+
+        # ── Redistribute ──────────────────────────────────────────
+        self._toolbar1.clear()
+        self._toolbar2.clear()
+        for a in actions[:split]:
+            self._toolbar1.addAction(a)
+        for a in actions[row2_start:]:
+            self._toolbar2.addAction(a)
+
+        # Dim the page-label action so it reads as a label, not a button
+        for tb in (self._toolbar1, self._toolbar2):
+            w = tb.widgetForAction(self._page_action)
+            if w is not None:
+                w.setStyleSheet("color:#aaa; background:transparent;")
+                break
+
+        # ── Toggle the row break ───────────────────────────────────
+        has_row2 = row2_start < len(actions)
+        if has_row2 != self._tb_has_break:
+            self._tb_has_break = has_row2
+            if has_row2:
+                self.insertToolBarBreak(self._toolbar2)
+            else:
+                self.removeToolBarBreak(self._toolbar2)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -3389,14 +3450,14 @@ class DicomViewer(QMainWindow):
     def _update_page_label(self):
         n = len(self._series_list)
         if n == 0:
-            self._page_label.setText("  Series  -  ")
+            self._page_action.setText("  Series  -  ")
             return
         ps      = self._page_size()
         page    = self._series_page
         start   = page * ps + 1
         end     = min(start + ps - 1, n)
         total_pages = (n - 1) // ps + 1
-        self._page_label.setText(
+        self._page_action.setText(
             f"  Series  {start}–{end} / {n}  (p{page+1}/{total_pages})  "
         )
 
