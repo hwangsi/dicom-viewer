@@ -2389,13 +2389,6 @@ class ViewerGrid(QWidget):
             p.setGeometry(int(x), int(y), int(cell_w), int(cell_h))
             p.update()
 
-            # z-order 보정: 안쪽으로 이동하는 패널(좌측/상단 컬럼)이 정적 중앙 패널보다
-            # 앞에 그려지도록 raise — 클릭 이벤트 dispatch 및 letterbox hit-test 모두 수정.
-            # (ox<0이면 좌측 컬럼이 우측으로 이동 → 가운데 위젯과 겹칠 때 클릭 선점)
-            # (oy<0이면 상단 행이 아래로 이동 → 마찬가지)
-            if (ox < 0 and sx == -1) or (oy < 0 and sy == -1):
-                p.raise_()
-
     # ── 이미지 이동 (PPT 캡처용 갭 조절) ─────────────────────
     def image_offset(self):
         return (self._image_offset_x, self._image_offset_y)
