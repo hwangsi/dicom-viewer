@@ -991,6 +991,67 @@ class GroupSyncManager:
 
 
 # ─────────────────────────────────────────────────────────────
+#  반응형 폰트 유틸리티
+# ─────────────────────────────────────────────────────────────
+def _fit_font_px(text_lines, avail_w, font_family="Consolas", min_px=9, max_px=20):
+    """text_lines 중 가장 긴 줄이 avail_w 안에 들어오는 최대 픽셀 크기를 반환.
+    min_px에서도 안 들어오면 min_px 반환 (호출자가 word-wrap 처리)."""
+    if not text_lines or avail_w <= 0:
+        return max_px
+    for px in range(max_px, min_px - 1, -1):
+        f = QFont(font_family)
+        f.setPixelSize(px)
+        fm = QFontMetrics(f)
+        if all(fm.horizontalAdvance(ln) <= avail_w for ln in text_lines if ln.strip()):
+            return px
+    return min_px
+
+
+class AutoSizeLabel(QLabel):
+    """각 \\n 구분 줄이 위젯 너비 안에 한 줄로 들어오도록 폰트 크기를 자동 조정하는 QLabel.
+    min_px에서도 안 들어오면 word-wrap으로 두 줄 허용."""
+
+    def __init__(self, *args, font_family="Consolas", min_px=9, max_px=18,
+                 h_pad=16, base_style="", **kwargs):
+        super().__init__(*args, **kwargs)
+        self._font_family = font_family
+        self._min_px      = min_px
+        self._max_px      = max_px
+        self._h_pad       = h_pad
+        self._base_style  = base_style
+        self._last_px     = -1
+        self._refreshing  = False
+        self.setWordWrap(True)
+
+    def setText(self, text):
+        super().setText(text)
+        self._refresh()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._refreshing:
+            self._refresh()
+
+    def _refresh(self):
+        if self._refreshing or self.width() <= 0:
+            return
+        text    = self.text()
+        avail_w = max(1, self.width() - self._h_pad)
+        lines   = [ln for ln in text.split('\n') if ln.strip()]
+        if not lines:
+            return
+        px = _fit_font_px(lines, avail_w, self._font_family, self._min_px, self._max_px)
+        if px != self._last_px:
+            self._refreshing = True
+            self._last_px    = px
+            self.setStyleSheet(
+                self._base_style +
+                f"font-size:{px}px;font-family:{self._font_family};"
+            )
+            self._refreshing = False
+
+
+# ─────────────────────────────────────────────────────────────
 #  단일 DICOM 패널
 # ─────────────────────────────────────────────────────────────
 class DicomPanel(QWidget):
@@ -1299,7 +1360,11 @@ class DicomPanel(QWidget):
             p.setClipping(False)
         else:
             p.setPen(QColor(65, 65, 65))
-            p.setFont(QFont("Arial", 11))
+            _ph   = min(self.width(), self.height())
+            _fpx  = max(10, min(28, round(_ph * 0.028)))
+            _pf   = QFont("Arial")
+            _pf.setPixelSize(_fpx)
+            p.setFont(_pf)
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
                        f"Panel {self.panel_id + 1}\n\n{tr('panel_placeholder')}")
             if self._active:
@@ -1309,9 +1374,11 @@ class DicomPanel(QWidget):
     def _paint_overlay(self, painter, cx, cy, cw, ch):
         """letterbox 영역 (cx,cy,cw,ch) 위에 DICOM 태그 텍스트 + 활성 테두리 그리기.
         zoom의 영향을 받지 않아 항상 letterbox 가장자리에 위치."""
-        FONT = QFont("Consolas", 8)
+        _fpx = max(8, min(13, round(cw * 0.011)))
+        FONT = QFont("Consolas")
+        FONT.setPixelSize(_fpx)
         painter.setFont(FONT)
-        LH = 13
+        LH = _fpx + 5
         M  = 5
 
         def draw_text(x_local, y_local, text, right=False):
@@ -1458,6 +1525,12 @@ class DicomPanel(QWidget):
                 and not self._drag_moved
                 and self.series):
             self._emit_cross_click(event.pos())
+        # Shift+클릭(드래그 없음) → 그룹 sync 토글 (Shift+드래그는 이미지 이동)
+        if (event.button() == Qt.MouseButton.LeftButton
+                and not self._drag_moved
+                and event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                and self.sync_manager is not None):
+            self.sync_manager.ctrl_toggle(self)
         # Panning 모드면 다시 열린 손으로
         if (event.button() == Qt.MouseButton.LeftButton
                 and getattr(self.window(), '_pan_mode', False)):
@@ -2135,6 +2208,10 @@ class SyncBadge(QWidget):
         if v != self._active:
             self._active = v
             self.update()
+
+    def enterEvent(self, event):
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        super().enterEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -2894,18 +2971,23 @@ class SeriesSidebar(QWidget):
         )
         layout.addWidget(hdr)
 
-        self.study_info = QLabel("")
-        self.study_info.setStyleSheet(
-            "background:#161616;color:#999;font:14px Consolas;"
-            "padding:8px;border-bottom:1px solid #2a2a2a;"
+        self.study_info = AutoSizeLabel(
+            "",
+            font_family="Consolas",
+            min_px=10, max_px=16,
+            h_pad=18,
+            base_style="background:#161616;color:#999;"
+                       "padding:8px;border-bottom:1px solid #2a2a2a;"
         )
-        self.study_info.setWordWrap(True)
         layout.addWidget(self.study_info)
 
-        self._tip_label = QLabel(tr('sidebar_tip'))
-        self._tip_label.setStyleSheet(
-            "background:#111;color:#666;font:13px Consolas;"
-            "padding:5px 6px;border-bottom:1px solid #222;"
+        self._tip_label = AutoSizeLabel(
+            tr('sidebar_tip'),
+            font_family="Consolas",
+            min_px=9, max_px=14,
+            h_pad=14,
+            base_style="background:#111;color:#666;"
+                       "padding:5px 6px;border-bottom:1px solid #222;"
         )
         layout.addWidget(self._tip_label)
 
@@ -2983,12 +3065,46 @@ class SeriesSidebar(QWidget):
         """series_list: [(label, pairs), ...]
         thumbnails: [QPixmap or None, ...]  — 같은 길이"""
         self.lw.clear()
-        for i, (label, pairs) in enumerate(series_list):
-            ds0  = pairs[0][1]   # (Path, hdr_ds) → hdr_ds
+
+        # ── 아이콘(144px) + 좌우 여백을 제외한 텍스트 가용 폭 ──
+        avail_w = max(50, self.width() - 144 - 22)
+
+        # 1단계: 모든 항목 데이터 수집 + 첫 줄(설명) 목록 생성
+        items_data   = []
+        first_lines  = []
+        for label, pairs in series_list:
+            ds0  = pairs[0][1]
             num  = _tag(ds0, 'SeriesNumber',      '?')
             desc = _tag(ds0, 'SeriesDescription', f'Series {num}')
             mod  = _tag(ds0, 'Modality',           '')
-            item = QListWidgetItem(f"[{num}] {desc}\n      {len(pairs)}개  {mod}")
+            first_lines.append(f"[{num}] {desc}")
+            items_data.append((label, num, desc, mod, len(pairs)))
+
+        # 2단계: 모든 첫 줄이 한 줄에 들어오는 최대 폰트 크기 계산
+        font_px = _fit_font_px(first_lines, avail_w, "Consolas", min_px=11, max_px=18)
+
+        # 3단계: 최소 크기에서도 넘치는 항목이 있으면 word-wrap 활성화
+        chk_f  = QFont("Consolas")
+        chk_f.setPixelSize(font_px)
+        chk_fm = QFontMetrics(chk_f)
+        needs_wrap = any(chk_fm.horizontalAdvance(ln) > avail_w
+                         for ln in first_lines if ln.strip())
+        self.lw.setWordWrap(needs_wrap)
+
+        # 4단계: 계산된 크기로 stylesheet 업데이트
+        self.lw.setStyleSheet(f"""
+            QListWidget {{
+                background:#111;color:#ccc;
+                border:none;font-size:{font_px}px;font-family:Consolas;
+            }}
+            QListWidget::item {{ padding:8px 6px;border-bottom:1px solid #1c1c1c; }}
+            QListWidget::item:selected {{ background:#004a8f;color:white; }}
+            QListWidget::item:hover    {{ background:#1e3a5f; }}
+        """)
+
+        # 5단계: 항목 추가
+        for i, (label, num, desc, mod, count) in enumerate(items_data):
+            item = QListWidgetItem(f"[{num}] {desc}\n      {count}개  {mod}")
             item.setToolTip(label)
             if thumbnails and i < len(thumbnails) and thumbnails[i] is not None:
                 item.setIcon(QIcon(thumbnails[i]))
@@ -3217,6 +3333,8 @@ class DicomViewer(QMainWindow):
         p = self._toolbar_params()
         self._tb_has_break     = True   # break exists between tb1/tb2 initially
         self._tb_widths_stale  = True   # widths need measuring on first layout call
+        self._tb_base_widths   = []     # widths measured at DPI-base font
+        self._tb_font_applied  = None   # font_px currently reflected in stylesheet
 
         # ── Two toolbar rows (content distributed dynamically) ────
         tb1 = QToolBar("Row 1", self)
@@ -3358,35 +3476,72 @@ class DicomViewer(QMainWindow):
         self._update_toolbar_layout()
 
     def _update_toolbar_layout(self):
-        """Distribute toolbar actions across rows to fill width naturally.
+        """Distribute toolbar actions across rows, growing font to fill row 1 when possible.
 
-        Puts actions into row 1 until self.width() is exceeded, then
-        overflows to row 2.  Separators are never left dangling at the
-        start or end of a row.  On DPI change (_tb_widths_stale=True) all
-        button widths are re-measured by temporarily loading them into tb1.
+        Strategy:
+          1. Measure button widths at base DPI font.
+          2. If all fit in row 1 with slack, scale up font (linear estimate) so the
+             row is filled.  Apply the new font and re-measure once to verify.
+             If the scaled font overshoots, revert to base.
+          3. If base font already overflows row 1, fall back to two rows.
         """
         if not hasattr(self, '_all_tb_actions') or not hasattr(self, '_toolbar1'):
             return
 
-        actions = self._all_tb_actions
+        actions   = self._all_tb_actions
+        available = self.width()
+        if available <= 0:
+            return
 
-        # ── (Re-)measure button widths when DPI changes ───────────
-        if getattr(self, '_tb_widths_stale', True):
+        p         = self._toolbar_params()
+        base_font = p['font_px']
+        max_font  = p['icon_sz']   # text height must not exceed icon height
+
+        def _do_measure(font_px):
+            """Apply font_px to stylesheet, load all actions into tb1, return width list."""
+            self.setStyleSheet(self._app_stylesheet(dict(p, font_px=font_px)))
+            for tb in (self._toolbar1, self._toolbar2):
+                tb.setIconSize(QSize(p['icon_sz'], p['icon_sz']))
             self._toolbar1.clear()
             self._toolbar2.clear()
             for a in actions:
                 self._toolbar1.addAction(a)
-            self._tb_widths = [
+            return [
                 (self._toolbar1.widgetForAction(a).sizeHint().width()
                  if self._toolbar1.widgetForAction(a) else 0)
                 for a in actions
             ]
+
+        # ── (Re-)measure base widths when DPI changes ─────────────
+        if getattr(self, '_tb_widths_stale', True):
+            self._tb_base_widths  = _do_measure(base_font)
+            self._tb_widths       = self._tb_base_widths[:]
+            self._tb_font_applied = base_font
             self._tb_widths_stale = False
 
+        base_total = sum(self._tb_base_widths)
+
+        # ── Determine target font ─────────────────────────────────
+        if 0 < base_total <= available:
+            # Everything fits in one row — scale font to fill width
+            target = min(round(base_font * available / base_total), max_font)
+            target = max(target, base_font)
+        else:
+            target = base_font   # needs two rows; stay at base
+
+        # ── Apply target font if changed ──────────────────────────
+        if target != getattr(self, '_tb_font_applied', base_font):
+            new_w = _do_measure(target)
+            if target > base_font and sum(new_w) > available:
+                # Linear estimate overshot due to fixed padding — revert
+                new_w = _do_measure(base_font)
+                target = base_font
+            self._tb_widths       = new_w
+            self._tb_font_applied = target
+
         # ── Find split: fill row 1 until width exceeded ───────────
-        available  = self.width()
         cumulative = 0
-        split      = len(actions)          # default: everything in row 1
+        split      = len(actions)
         for i, w in enumerate(self._tb_widths):
             cumulative += w
             if cumulative > available:
