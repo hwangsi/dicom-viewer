@@ -4,7 +4,7 @@
 레이아웃 자유, 갭줄이기, 확대, 축소, cross-link 가능하고, 전체화면 캡쳐, 선택화면 캡쳐 모두 가능하고 클립보드에 붙습니다.
 단일 Python 파일(`dicom_viewer.py`)로 실행 가능합니다.
 
-![demo1](assets/final_part2.gif)
+![demo1](assets/final_part1.gif)
 
 ---
 
