@@ -1,4 +1,4 @@
-# Hwang Viewer for Radiologic Presentation — v3.1
+# Hwang Viewer for Radiologic Presentation — v3.11
 
 강의 자료(PPT) 제작에 최적화된 가볍고 빠른 Windows DICOM 뷰어.
 레이아웃 자유, 갭줄이기, 확대, 축소, cross-link 가능하고, 전체화면 캡쳐, 선택화면 캡쳐 모두 가능하고 클립보드에 붙습니다.
@@ -214,6 +214,21 @@ build.bat          — Windows EXE 빌드 스크립트
 requirements.txt   — 의존 패키지
 README.md          — 본 문서
 ```
+
+---
+
+## v3.11 변경 사항 (v3.1 대비)
+
+### 새 기능
+
+- **툴바 폰트 자동 확장** — 한 줄 툴바에 여백이 있을 때 폰트를 키워서 공간을 채움. 여백이 부족하면 두 줄로 전환하는 기존 동작 유지
+- **Shift+클릭 그룹 동기화 토글** — Shift+드래그(갭 조절)와 구분하여 Shift+클릭(드래그 없음) 시 ∞ 그룹 sync 추가/제거
+- **∞ 동기화 배지 위치 변경** — 우하단 → 좌상단. 오버랩 모드에서 우측이 덮여도 배지가 항상 보임
+
+### 버그 수정
+
+- **∞ 동기화 배지 손 모양 커서** — 배지에 마우스 올리면 `PointingHandCursor` 표시 (이전엔 부모 패널 커서 그대로)
+- **오버랩 모드 좌측 컬럼 클릭 정확도** — Shift+드래그로 패널을 겹치기 직전까지 좁혔을 때 좌측 컬럼 클릭이 가운데 컬럼으로 오인되던 문제 수정. `children()` z-order 기반 hit-test 적용
 
 ---
 
