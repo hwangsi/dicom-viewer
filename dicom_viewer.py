@@ -1870,8 +1870,7 @@ class DicomPanel(QWidget):
         cx = (self.width()  - base_w) // 2 + self._paint_offset_x
         cy = (self.height() - base_h) // 2 + self._paint_offset_y
         MARGIN = 8
-        badge.move(cx + base_w - badge.width()  - MARGIN,
-                   cy + base_h - badge.height() - MARGIN)
+        badge.move(cx + MARGIN, cy + MARGIN)
         badge.show()
         badge.raise_()
 
@@ -2390,6 +2389,13 @@ class ViewerGrid(QWidget):
             p.setGeometry(int(x), int(y), int(cell_w), int(cell_h))
             p.update()
 
+            # z-order 보정: 안쪽으로 이동하는 패널(좌측/상단 컬럼)이 정적 중앙 패널보다
+            # 앞에 그려지도록 raise — 클릭 이벤트 dispatch 및 letterbox hit-test 모두 수정.
+            # (ox<0이면 좌측 컬럼이 우측으로 이동 → 가운데 위젯과 겹칠 때 클릭 선점)
+            # (oy<0이면 상단 행이 아래로 이동 → 마찬가지)
+            if (ox < 0 and sx == -1) or (oy < 0 and sy == -1):
+                p.raise_()
+
     # ── 이미지 이동 (PPT 캡처용 갭 조절) ─────────────────────
     def image_offset(self):
         return (self._image_offset_x, self._image_offset_y)
@@ -2430,18 +2436,20 @@ class ViewerGrid(QWidget):
     def _panel_at_global(self, gx, gy):
         """ViewerGrid 좌표 (gx, gy)에서 클릭/마우스 위치에 해당하는 패널 반환.
 
-        z-order(위에 그려진 패널이 화면에서도 위에 보임) 기준 — panels 리스트의 뒤에서
-        앞으로 검사하면서 letterbox에 들어가는 첫 패널을 반환. 사용자가 화면에서 본 이미지의
-        패널과 일치하는 동작.
+        Qt의 실제 widget z-order(self.children() 마지막 = 맨 위)를 기준으로
+        letterbox hit-test를 수행한다.  panels 리스트 순서 대신 children() 순서를
+        사용하므로, _relayout_panels에서 raise_()로 보정된 z-order가 그대로 반영된다.
         """
-        # 뒤(위) → 앞(아래) 순회
-        for p in reversed(self.panels):
-            r = self._panel_letterbox_global_rect(p)
+        panel_set = set(self.panels)
+        for child in reversed(self.children()):
+            if child not in panel_set:
+                continue
+            r = self._panel_letterbox_global_rect(child)
             if r is None:
                 continue
             x, y, w, h = r
             if x <= gx < x + w and y <= gy < y + h:
-                return p
+                return child
         return None
 
     def _panel_image_global_rect(self, panel, pan_x=None, pan_y=None):
