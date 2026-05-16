@@ -5066,67 +5066,14 @@ class DicomViewer(QMainWindow):
 
     def copy_area(self):
         """?ъ슜?먭? viewer_grid ?꾩뿉 ?ш컖?뺤쓣 洹몃젮??洹??곸뿭留?罹≪쿂."""
-        # ?쒖꽦 ?⑤꼸 ?뚮? ?뚮몢由?+ 紐⑤뱺 ?⑤꼸??cross-hair ?쇱떆 ?쒓굅
-        active = self.viewer_grid.active_panel
-        was_active = False
-        if active and active._active:
-            was_active = True
-            active._active = False
-            active.update()
-
-        # 紐⑤뱺 ?⑤꼸??crosshair ?좎떆 ?꾧린 (媛??⑤꼸 蹂?backup)
-        crosshair_backup = []
-        for p in self.viewer_grid.panels:
-            crosshair_backup.append((p, p._crosshair))
-            if p._crosshair is not None:
-                p._crosshair = None
-                if p._raw_pix:
-                    p._make_display()   # crosshair??_disp_pix??洹몃젮吏誘濡??ъ깮???꾩슂
-        QApplication.processEvents()
-
-        def on_done(rect):
-            try:
-                if rect is None or rect.width() < 4 or rect.height() < 4:
-                    self.statusBar().showMessage(tr('status_area_cancel'))
-                    return
-                # 罹≪쿂 吏곸쟾 ??paint媛 ?뺤떎???앸궃 ?곹깭濡?蹂댁옣
-                if active is not None:
-                    active.repaint()
-                for p, _ch in crosshair_backup:
-                    p.repaint()
-                QApplication.processEvents()
-
-                full = self.viewer_grid.grab()
-                # HiDPI 蹂댁젙
-                dpr_x = full.width()  / max(1, self.viewer_grid.width())
-                dpr_y = full.height() / max(1, self.viewer_grid.height())
-                scaled = QRect(
-                    int(round(rect.x()      * dpr_x)),
-                    int(round(rect.y()      * dpr_y)),
-                    int(round(rect.width()  * dpr_x)),
-                    int(round(rect.height() * dpr_y)),
-                )
-                cropped = full.copy(scaled)
+        def on_pixmap(cropped):
+            if cropped:
                 QApplication.clipboard().setPixmap(cropped)
                 self.statusBar().showMessage(
                     tr('status_area_done').format(w=cropped.width(), h=cropped.height())
                 )
-            finally:
-                # ?쒖꽦 ?뚮몢由?蹂듭썝
-                if was_active and active:
-                    active._active = True
-                    active.update()
-                # crosshair 蹂듭썝
-                for p, ch in crosshair_backup:
-                    if ch is not None:
-                        p._crosshair = ch
-                        if p._raw_pix:
-                            p._make_display()
 
-        sel = _AreaSelector(self.viewer_grid, on_done)
-        sel.show()
-        sel.raise_()
-        sel.setFocus()
+        self._select_area_pixmap(on_pixmap)
 
     # ?? ?⑤꼸 ?대?吏 ?대룞 (PPT 罹≪쿂????媛?議곗젅 + ?ㅻ쾭?? ????
     def _select_area_pixmap(self, on_pixmap):
@@ -5250,16 +5197,14 @@ class DicomViewer(QMainWindow):
                 self.statusBar().showMessage(tr('status_saved').format(path=path))
 
     def save_area(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Area", "capture_area",
-            "PNG (*.png);;JPEG (*.jpg);;BMP (*.bmp)"
-        )
-        if not path:
-            return
-
         def on_pixmap(pix):
-            if pix:
-                pix.save(path)
+            if not pix:
+                return
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Area", "capture_area",
+                "PNG (*.png);;JPEG (*.jpg);;BMP (*.bmp)"
+            )
+            if path and pix.save(path):
                 self.statusBar().showMessage(tr('status_saved').format(path=path))
 
         self._select_area_pixmap(on_pixmap)
