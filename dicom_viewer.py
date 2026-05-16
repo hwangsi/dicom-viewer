@@ -3820,7 +3820,7 @@ class LoadingWindow(QWidget):
         self.progress.setTextVisible(True)
         root.addWidget(self.progress)
 
-        footer = QLabel("F1 Help  |  MIT License: free use, copy, modify, and distribute; no warranty.")
+        footer = QLabel("F1 Help  |  Apache 2.0 License: use, modify, and distribute with notice; no warranty.")
         footer.setObjectName("loadingFooter")
         footer.setWordWrap(True)
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
