@@ -30,9 +30,11 @@ python dicom_viewer.py
 
 ```
 방법 1: build.bat 더블클릭 (Windows)
-방법 2: python -m PyInstaller HwangViewer.spec
+방법 2: .venv\Scripts\python.exe -m PyInstaller HwangViewer.spec
         → dist\HwangViewer.exe 생성 (~60–80 MB, Python 설치 불필요)
 ```
+
+`build.bat`는 현재 폴더의 `.venv`를 자동으로 사용합니다. `.venv`가 없으면 새로 만들고, `requirements.txt`와 `pyinstaller`를 설치한 뒤 빌드합니다.
 
 생성된 `HwangViewer.exe` 단일 파일을 다른 PC에 복사하면 Python 없이도 실행 가능합니다 (Windows 10/11 64-bit).
 
