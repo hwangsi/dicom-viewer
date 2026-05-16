@@ -4955,6 +4955,9 @@ class DicomViewer(QMainWindow):
             "<p>© 2026 Sungil Hwang<br>"
             "Department of Radiology<br>"
             "Seoul National University Bundang Hospital</p>"
+            "<p><b>License:</b> Apache License 2.0<br>"
+            "Use, modify, and distribute with license notice; no warranty.<br>"
+            "See the LICENSE file for full terms.</p>"
             "<p style='color:#888;'>Built with Python, PyQt6, and pydicom</p>"
         )
 
