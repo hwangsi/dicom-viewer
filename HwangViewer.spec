@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# Hwang Viewer for Radiologic Presentation v3.0
-# Build: python -m PyInstaller HwangViewer.spec
+# Hwang Viewer for Radiologic Presentation v4.1
+# Build: .venv\Scripts\python.exe -m PyInstaller HwangViewer.spec
 # Output: dist/HwangViewer.exe (~60-80 MB, Python not required)
 #
 
@@ -14,13 +14,9 @@ a = Analysis(
     datas=[],
     hiddenimports=[
         'pydicom',
-        'pydicom.encoders',
-        'pydicom.encoders.gdcm',
-        'pydicom.encoders.pylibjpeg',
+        'pydicom.pixels.decoders.gdcm',
+        'pydicom.pixels.decoders.pylibjpeg',
         'pylibjpeg',
-        'pylibjpeg.plugins',
-        'pylibjpeg_libjpeg',
-        'pylibjpeg_openjpeg',
         'numpy',
     ],
     hookspath=[],
