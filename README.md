@@ -1,4 +1,4 @@
-# Hwang Viewer for Radiologic Presentation — v3.11
+# Hwang Viewer for Radiologic Presentation — v4.1
 
 강의 자료(PPT) 제작에 최적화된 가볍고 빠른 Windows DICOM 뷰어.
 레이아웃 자유, 갭줄이기, 확대, 축소, cross-link 가능하고, 전체화면 캡쳐, 선택화면 캡쳐 모두 가능하고 클립보드에 붙습니다.
@@ -60,14 +60,14 @@ python dicom_viewer.py
 |------|------|
 | `🏷️ Tags` | DICOM 태그 오버레이 ON/OFF |
 | `↺ W/L` | 활성 패널 Window Level/Width 리셋 |
-| `↺ Position` | 모든 패널 Gap / Zoom / Pan 리셋 |
-| `✛ Cross-ref` | Cross-reference 모드 ON/OFF |
-| `✋ Panning` | Panning 모드 ON/OFF |
-| `📋 Copy Image` | 활성 패널 클립보드 복사 |
-| `🗂️ Copy Screen` | 전체 화면 클립보드 복사 |
+| `↺ Pos` | 모든 패널 Gap / Zoom / Pan 리셋 |
+| `✣ X-ref` | Cross-reference 모드 ON/OFF |
+| `✋ Pan` | Panning 모드 ON/OFF |
+| `📋 Copy Img` | 활성 패널 클립보드 복사 |
+| `🗂️ Copy Scr` | 전체 화면 클립보드 복사 |
 | `✂️ Copy Area` | 영역 선택 클립보드 복사 |
-| `💾 Save Image` | 활성 패널 PNG/JPG 저장 |
-| `💾 Save Screen` | 전체 화면 PNG/JPG 저장 |
+| `💾 Save Img` | 활성 패널 PNG/JPG 저장 |
+| `💾 Save Scr` | 전체 화면 PNG/JPG 저장 |
 
 툴바는 **DPI-adaptive** — Windows 125%/150%/200% 디스플레이 스케일링에서 폰트와 아이콘 크기가 자동 조정됩니다.
 
@@ -136,7 +136,7 @@ Multi-b-value DWI 시리즈를 열면 패널 좌상단에 **b-value 배지**가 
 
 | 동작 | 기능 |
 |------|------|
-| `P` 또는 툴바 `✋ Panning` | 모드 ON/OFF |
+| `P` 또는 툴바 `✋ Pan` | 모드 ON/OFF |
 | 모드 ON + 좌클릭 드래그 | 영상 위치 이동 (1:1 비율) |
 | 자석 효과 | 인접 패널 이미지 가장자리 3px 이내에 자동 정렬 |
 
@@ -216,6 +216,47 @@ README.md          — 본 문서
 ```
 
 ---
+
+## v4.1 변경 사항 (v4.0 대비)
+
+### Annotation 편집성 강화
+
+- 기존 annotation을 툴 선택 없이 직접 클릭/드래그해서 다시 이동할 수 있습니다.
+- ROI, length, arrow, text annotation 모두 직접 이동을 지원합니다.
+- ROI를 이동하면 현재 위치 기준으로 통계값을 다시 계산합니다.
+- ROI 통계 박스와 length label 박스는 본체와 별도로 위치를 드래그 조정할 수 있습니다.
+- `CLR Ann`은 활성 패널 annotation 삭제, `CLR All Ann`은 전체 패널 annotation 삭제로 분리했습니다.
+
+### Overlay 표시 개선
+
+- `T` 키가 3단계로 동작합니다: DICOM header + annotation 표시 → annotation만 표시 → 모두 숨김.
+- DICOM overlay의 `Pixel`, image size, `WL/WW/Zoom` 라인에서 깨지던 곱하기 표기를 `x`로 정리했습니다.
+
+### UI 및 실행 안정화
+
+- 기존 toolbar는 아이콘 문자와 텍스트를 함께 표시하고, annotation 기능에는 전용 그림 아이콘을 추가했습니다.
+- toolbar font를 줄이고 row overflow 배치를 보정했습니다.
+- `run_viewer.bat` 실행 시 콘솔을 UTF-8로 맞춰 `[TIMER]` 한글 로그가 깨지지 않도록 했습니다.
+
+---
+
+## v4.0 변경 사항 (v3.11 대비)
+
+### 새 기능
+
+- **Annotation overlay** — 영상 위에 별도 overlay layer로 annotation을 표시합니다. Zoom, pan, layout 변경 시 원본 image 좌표계를 기준으로 다시 그립니다.
+- **Size measurement** — 두 점 사이 길이를 측정합니다. `PixelSpacing`이 있으면 mm, 없으면 px 단위로 표시합니다.
+- **Arrow annotation** — 드래그 방향으로 화살표를 그립니다.
+- **Text annotation** — 클릭 위치에 텍스트 label을 추가합니다.
+- **Ellipse ROI** — 드래그한 방향과 크기에 따라 원형 또는 타원형 ROI를 그리고 통계를 표시합니다.
+- **ROI statistics** — ROI 면적, mean, min, max, SD를 표시합니다. CT는 HU, 그 외 modality는 SI로 표시합니다.
+
+### 조작
+
+- Toolbar의 `Measure`, `Arrow`, `Text`, `ROI` 중 하나를 선택한 뒤 영상 위에서 클릭/드래그합니다.
+- `Delete` 또는 `Backspace`로 현재 slice의 마지막 annotation을 삭제합니다.
+- `Clear Ann`으로 활성 패널의 annotation을 모두 지웁니다.
+- `Esc`로 annotation tool을 끕니다.
 
 ## v3.11 변경 사항 (v3.1 대비)
 

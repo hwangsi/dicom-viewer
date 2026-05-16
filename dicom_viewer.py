@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Hwang Viewer for Radiologic Presentation — v3.11
+Hwang Viewer for Radiologic Presentation v4.1
 ==========================================
-설치: pip install pydicom pyqt6 numpy pylibjpeg
+?ㅼ튂: pip install pydicom pyqt6 numpy pylibjpeg
 
-조작:
-  Left drag (좌우/상하)  : WW / WL 조절
-  Scroll                 : 슬라이스 이동 (이전/다음)
-  Ctrl + Scroll          : 확대 / 축소
-  T                      : DICOM 태그 오버레이 ON/OFF
-  R                      : W/L & Zoom 리셋
-  Ctrl+1 / Ctrl+2        : 1×1 / 2×2 레이아웃
-  Ctrl+C                 : 활성 패널 클립보드 복사
-  Ctrl+Shift+C           : 전체 패널 클립보드 복사
-  Ctrl+S / Ctrl+Shift+S  : 활성/전체 저장
+議곗옉:
+  Left drag (醫뚯슦/?곹븯)  : WW / WL 議곗젅
+  Scroll                 : ?щ씪?댁뒪 ?대룞 (?댁쟾/?ㅼ쓬)
+  Ctrl + Scroll          : ?뺣? / 異뺤냼
+  T                      : DICOM ?쒓렇 ?ㅻ쾭?덉씠 ON/OFF
+  R                      : W/L & Zoom 由ъ뀑
+  Ctrl+1 / Ctrl+2        : 1횞1 / 2횞2 ?덉씠?꾩썐
+  Ctrl+C                 : ?쒖꽦 ?⑤꼸 ?대┰蹂대뱶 蹂듭궗
+  Ctrl+Shift+C           : ?꾩껜 ?⑤꼸 ?대┰蹂대뱶 蹂듭궗
+  Ctrl+S / Ctrl+Shift+S  : ?쒖꽦/?꾩껜 ???
 """
 
 import sys
@@ -21,6 +21,7 @@ import os
 import re
 import json
 import time
+import math
 import multiprocessing
 import numpy as np
 from pathlib import Path
@@ -35,7 +36,7 @@ except ImportError:
 
 
 def _read_dicom_header(path_str: str):
-    """ProcessPoolExecutor 워커 — pickle을 위해 반드시 top-level 함수여야 함."""
+    """ProcessPoolExecutor ?뚯빱 ??pickle???꾪빐 諛섎뱶??top-level ?⑥닔?ъ빞 ??"""
     try:
         ds = pydicom.dcmread(path_str, stop_before_pixels=True, force=True)
         _ = str(getattr(ds, 'SeriesInstanceUID', None) or '')
@@ -44,7 +45,7 @@ def _read_dicom_header(path_str: str):
         return None
 
 
-_header_cache: dict = {}  # {폴더 절대경로: (파일수, [(Path, ds), ...])}
+_header_cache: dict = {}  # {?대뜑 ?덈?寃쎈줈: (?뚯씪?? [(Path, ds), ...])}
 
 try:
     from PyQt6.QtWidgets import (
@@ -65,9 +66,9 @@ except ImportError:
     PYQT_OK = False
 
 
-# ─────────────────────────────────────────────────────────────
-#  i18n — translations & LocaleManager
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  i18n ??translations & LocaleManager
+# ?????????????????????????????????????????????????????????????
 _SETTINGS_PATH = Path(__file__).with_name('settings.json')
 
 _SHORTCUTS_HTML = {
@@ -99,6 +100,16 @@ _SHORTCUTS_HTML = {
 <tr><td><b>Ctrl+G</b></td><td>Reset Position — Gap / Zoom / Pan / W/L 모두 리셋</td></tr>
 <tr><td colspan='2' style='color:#888;'>수동 입력 (다른 환자 재사용): View → 이미지 이동 설정...</td></tr>
 </table>
+<h3>🖱️ Mouse</h3>
+<table cellpadding='4'>
+<tr><td><b>휠 스크롤</b></td><td>슬라이스 이동</td></tr>
+<tr><td><b>Ctrl + 휠</b></td><td>확대 / 축소</td></tr>
+<tr><td><b>가운데 버튼 드래그 ↕</b></td><td>확대 / 축소 (위로 = 확대)</td></tr>
+<tr><td><b>좌클릭 드래그 ↕</b></td><td>슬라이스 이동 (10px = 1장)</td></tr>
+<tr><td><b>좌클릭 드래그 (Panning ON)</b></td><td>영상 위치 이동</td></tr>
+<tr><td><b>우클릭 드래그</b></td><td>W/L (↕) &amp; W/W (↔)</td></tr>
+<tr><td><b>좌클릭 (Cross-ref ON)</b></td><td>해당 위치 크로스 지정</td></tr>
+</table>
 </td><td width='50%' valign='top' style='padding-left:20px; border-left:1px solid #444;'>
 <h3>⊞ Layout</h3>
 <table cellpadding='4'>
@@ -110,21 +121,19 @@ _SHORTCUTS_HTML = {
 </table>
 <h3>🖼️ Display</h3>
 <table cellpadding='4'>
-<tr><td><b>T</b></td><td>DICOM 태그 오버레이 ON/OFF<br>(WL/WW 정보 포함)</td></tr>
+<tr><td><b>T</b></td><td>표시 3단계 전환<br><span style='color:#888;'>태그+annotation → annotation만 → 모두 숨김</span></td></tr>
 <tr><td><b>R</b></td><td>활성 패널 W/L 리셋 (zoom/pan은 유지)</td></tr>
 <tr><td><b>Ctrl+G</b></td><td>Reset Position — 모든 패널의 Gap / Zoom / Pan / W/L 리셋</td></tr>
 <tr><td><b>X</b></td><td>Cross-reference ON/OFF</td></tr>
 <tr><td><b>P</b></td><td>Panning ON/OFF<br><span style='color:#888;'>좌클릭 드래그가 영상 이동이 됨<br>줌이나 갭 줄임 후 영상 위치 조정용</span></td></tr>
 </table>
-<h3>🖱️ Mouse</h3>
+<h3>✏️ Annotation</h3>
 <table cellpadding='4'>
-<tr><td><b>휠 스크롤</b></td><td>슬라이스 이동</td></tr>
-<tr><td><b>Ctrl + 휠</b></td><td>확대 / 축소</td></tr>
-<tr><td><b>가운데 버튼 드래그 ↕</b></td><td>확대 / 축소 (위로 = 확대)</td></tr>
-<tr><td><b>좌클릭 드래그 ↕</b></td><td>슬라이스 이동 (10px = 1장)</td></tr>
-<tr><td><b>좌클릭 드래그 (Panning ON)</b></td><td>영상 위치 이동</td></tr>
-<tr><td><b>우클릭 드래그</b></td><td>W/L (↕) &amp; W/W (↔)</td></tr>
-<tr><td><b>좌클릭 (Cross-ref ON)</b></td><td>해당 위치 크로스 지정</td></tr>
+<tr><td><b>Measure / Arrow / Text / ROI</b></td><td>툴바 또는 Annotation 메뉴에서 선택 후 영상 위에 작성</td></tr>
+<tr><td><b>ESC</b></td><td>현재 annotation tool 종료</td></tr>
+<tr><td><b>기존 annotation 드래그</b></td><td>툴 선택 없이도 위치 수정<br><span style='color:#888;'>ROI/선/화살표/text를 잡아 이동, ROI는 이동 후 통계 재계산</span></td></tr>
+<tr><td><b>측정값 박스 드래그</b></td><td>ROI 통계나 length 라벨 박스 위치만 이동</td></tr>
+<tr><td><b>CLR Ann / CLR All Ann</b></td><td>활성 패널 또는 전체 패널 annotation 삭제</td></tr>
 </table>
 <h3>⌨ Navigation</h3>
 <table cellpadding='4'>
@@ -161,6 +170,16 @@ Smooth: 1px per 4px mouse</span></td></tr>
 <tr><td><b>Ctrl+G</b></td><td>Reset Position — Gap / Zoom / Pan / W/L</td></tr>
 <tr><td colspan='2' style='color:#888;'>Manual input: View → Image Offset...</td></tr>
 </table>
+<h3>🖱️ Mouse</h3>
+<table cellpadding='4'>
+<tr><td><b>Scroll wheel</b></td><td>Navigate slices</td></tr>
+<tr><td><b>Ctrl + scroll</b></td><td>Zoom in / out</td></tr>
+<tr><td><b>Middle button drag ↕</b></td><td>Zoom (up = in)</td></tr>
+<tr><td><b>Left-drag ↕</b></td><td>Navigate slices (10px = 1)</td></tr>
+<tr><td><b>Left-drag (Panning ON)</b></td><td>Move image</td></tr>
+<tr><td><b>Right-drag</b></td><td>W/L (↕) &amp; W/W (↔)</td></tr>
+<tr><td><b>Left-click (Cross-ref ON)</b></td><td>Set cross position</td></tr>
+</table>
 </td><td width='50%' valign='top' style='padding-left:20px; border-left:1px solid #444;'>
 <h3>⊞ Layout</h3>
 <table cellpadding='4'>
@@ -172,21 +191,19 @@ Smooth: 1px per 4px mouse</span></td></tr>
 </table>
 <h3>🖼️ Display</h3>
 <table cellpadding='4'>
-<tr><td><b>T</b></td><td>DICOM tag overlay ON/OFF (includes WL/WW)</td></tr>
+<tr><td><b>T</b></td><td>3-step display cycle<br><span style='color:#888;'>Tags+annotations → annotations only → hide both</span></td></tr>
 <tr><td><b>R</b></td><td>Reset W/L of active panel (zoom/pan preserved)</td></tr>
 <tr><td><b>Ctrl+G</b></td><td>Reset Position — all panels Gap / Zoom / Pan / W/L</td></tr>
 <tr><td><b>X</b></td><td>Cross-reference ON/OFF</td></tr>
 <tr><td><b>P</b></td><td>Panning ON/OFF<br><span style='color:#888;'>Left-drag moves image<br>Use after zoom or gap reduction</span></td></tr>
 </table>
-<h3>🖱️ Mouse</h3>
+<h3>✏️ Annotation</h3>
 <table cellpadding='4'>
-<tr><td><b>Scroll wheel</b></td><td>Navigate slices</td></tr>
-<tr><td><b>Ctrl + scroll</b></td><td>Zoom in / out</td></tr>
-<tr><td><b>Middle button drag ↕</b></td><td>Zoom (up = in)</td></tr>
-<tr><td><b>Left-drag ↕</b></td><td>Navigate slices (10px = 1)</td></tr>
-<tr><td><b>Left-drag (Panning ON)</b></td><td>Move image</td></tr>
-<tr><td><b>Right-drag</b></td><td>W/L (↕) &amp; W/W (↔)</td></tr>
-<tr><td><b>Left-click (Cross-ref ON)</b></td><td>Set cross position</td></tr>
+<tr><td><b>Measure / Arrow / Text / ROI</b></td><td>Select from toolbar or Annotation menu, then draw on the image</td></tr>
+<tr><td><b>ESC</b></td><td>Exit the current annotation tool</td></tr>
+<tr><td><b>Drag existing annotation</b></td><td>Edit position without selecting a tool<br><span style='color:#888;'>Move ROI, line, arrow, or text directly; ROI statistics are recalculated after move</span></td></tr>
+<tr><td><b>Drag value box</b></td><td>Move only the ROI statistics or length label box</td></tr>
+<tr><td><b>CLR Ann / CLR All Ann</b></td><td>Delete annotations in the active panel or all panels</td></tr>
 </table>
 <h3>⌨ Navigation</h3>
 <table cellpadding='4'>
@@ -656,17 +673,73 @@ def tr(key):
     return LocaleManager.instance().tr(key)
 
 
-# ─────────────────────────────────────────────────────────────
-#  헬퍼: DICOM 태그 → 문자열
-# ─────────────────────────────────────────────────────────────
+def _dicom_text(value, default=''):
+    s = str(value).strip()
+    if not s:
+        return default
+
+    candidates = [s]
+    # Recover Korean text if pydicom had to decode bytes with a fallback charset.
+    for src_enc in ('latin1', 'cp1252'):
+        try:
+            raw = s.encode(src_enc)
+        except Exception:
+            continue
+        for dst_enc in ('cp949', 'euc-kr', 'utf-8'):
+            try:
+                cand = raw.decode(dst_enc).strip()
+            except Exception:
+                continue
+            if cand and cand not in candidates:
+                candidates.append(cand)
+
+    def score(text):
+        bad = text.count('\ufffd') * 8 + text.count('?') * 3
+        bad += sum(1 for ch in text if ord(ch) < 32 and ch not in '\t\n\r')
+        has_hangul = any('\uac00' <= ch <= '\ud7a3' for ch in text)
+        return (bad, 0 if has_hangul else 1)
+
+    return min(candidates, key=score) or default
+
+
+def _decode_dicom_bytes(raw, default=''):
+    if isinstance(raw, str):
+        return _dicom_text(raw, default)
+    if not isinstance(raw, (bytes, bytearray)):
+        return default
+    for enc in ('utf-8', 'cp949', 'euc-kr', 'latin1'):
+        try:
+            text = bytes(raw).decode(enc).strip()
+        except Exception:
+            continue
+        if text:
+            return _dicom_text(text, default)
+    return default
+
+
+# ?????????????????????????????????????????????????????????????
+#  ?ы띁: DICOM ?쒓렇 ??臾몄옄??
+# ?????????????????????????????????????????????????????????????
 def _tag(ds, attr, default=''):
     try:
+        raw_text = ''
+        if hasattr(ds, 'data_element'):
+            elem = ds.data_element(attr)
+            if elem is not None:
+                raw_value = elem.value
+                if hasattr(raw_value, 'original_string'):
+                    raw_text = _decode_dicom_bytes(raw_value.original_string, default)
+                elif isinstance(raw_value, (bytes, bytearray)):
+                    raw_text = _decode_dicom_bytes(raw_value, default)
         v = getattr(ds, attr, default)
         if v is None:
-            return default
-        if hasattr(v, '__iter__') and not isinstance(v, str):
+            return raw_text or default
+        if isinstance(v, (list, tuple)) or v.__class__.__name__ == 'MultiValue':
             v = v[0]
-        return str(v).strip() or default
+        text = _dicom_text(v, default)
+        if raw_text and (text == default or text.count('?') > raw_text.count('?')):
+            return raw_text
+        return text
     except Exception:
         return default
 
@@ -679,9 +752,9 @@ def _fmt_date(raw):
 
 
 def build_overlay(ds, idx, total):
-    """4-코너 텍스트 리스트 반환: (top_left, top_right, bot_left, bot_right)"""
-    # 상단 좌 — 환자/스터디
-    patient  = str(getattr(ds, 'PatientName', 'Anonymous')).strip()
+    """4-肄붾꼫 ?띿뒪??由ъ뒪??諛섑솚: (top_left, top_right, bot_left, bot_right)"""
+    # ?곷떒 醫????섏옄/?ㅽ꽣??
+    patient  = _tag(ds, 'PatientName', 'Anonymous')
     pat_id   = _tag(ds, 'PatientID',   '')
     sex      = _tag(ds, 'PatientSex',  '')
     age      = _tag(ds, 'PatientAge',  '')
@@ -694,7 +767,7 @@ def build_overlay(ds, idx, total):
     if sd:
         top_left.append(sd)
 
-    # 상단 우 — 시리즈
+    # ?곷떒 ?????쒕━利?
     top_right = []
     for attr in ('SeriesDescription', 'SequenceName', 'ProtocolName'):
         v = _tag(ds, attr, '')
@@ -704,7 +777,7 @@ def build_overlay(ds, idx, total):
     if sn:
         top_right.append(f"Series #{sn}")
 
-    # 하단 좌 — 슬라이스
+    # ?섎떒 醫????щ씪?댁뒪
     bot_left = [f"Img {idx+1} / {total}"]
     sl = _tag(ds, 'SliceLocation', '')
     if sl:
@@ -714,14 +787,14 @@ def build_overlay(ds, idx, total):
         bot_left.append(f"Thick {st} mm")
     try:
         sp = ds.PixelSpacing
-        bot_left.append(f"Pixel {float(sp[0]):.2f}×{float(sp[1]):.2f} mm")
+        bot_left.append(f"Pixel {float(sp[0]):.2f} x {float(sp[1]):.2f} mm")
     except Exception:
         pass
     r = _tag(ds, 'Rows', ''); c = _tag(ds, 'Columns', '')
     if r and c:
-        bot_left.append(f"{c}×{r} px")
+        bot_left.append(f"{c} x {r} px")
 
-    # 하단 우 — MR/CT 파라미터
+    # ?섎떒 ????MR/CT ?뚮씪誘명꽣
     bot_right = []
     for label, attr in [("TR", "RepetitionTime"), ("TE", "EchoTime"),
                          ("TI", "InversionTime"),  ("FA", "FlipAngle")]:
@@ -739,16 +812,16 @@ def build_overlay(ds, idx, total):
     return top_left, top_right, bot_left, bot_right
 
 
-# ─────────────────────────────────────────────────────────────
-#  Cross-reference 좌표 계산 헬퍼
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  Cross-reference 醫뚰몴 怨꾩궛 ?ы띁
+# ?????????????????????????????????????????????????????????????
 def _has_position_tags(ds):
     return (hasattr(ds, 'ImagePositionPatient') and
             hasattr(ds, 'ImageOrientationPatient') and
             hasattr(ds, 'PixelSpacing'))
 
 def _pixel_to_world(ds, row_f, col_f):
-    """이미지 픽셀 (row, col) → 3D 월드 좌표 (mm)."""
+    """?대?吏 ?쎌? (row, col) ??3D ?붾뱶 醫뚰몴 (mm)."""
     try:
         ipp     = np.array([float(x) for x in ds.ImagePositionPatient])
         iop     = np.array([float(x) for x in ds.ImageOrientationPatient])
@@ -760,7 +833,7 @@ def _pixel_to_world(ds, row_f, col_f):
         return None
 
 def _world_to_pixel(ds, world):
-    """3D 월드 좌표 → 이미지 픽셀 (row_f, col_f)."""
+    """3D ?붾뱶 醫뚰몴 ???대?吏 ?쎌? (row_f, col_f)."""
     try:
         ipp     = np.array([float(x) for x in ds.ImagePositionPatient])
         iop     = np.array([float(x) for x in ds.ImageOrientationPatient])
@@ -775,7 +848,7 @@ def _world_to_pixel(ds, world):
         return None
 
 def _find_best_slice(pairs, world):
-    """시리즈에서 world 좌표에 가장 가까운 슬라이스 인덱스 반환."""
+    """?쒕━利덉뿉??world 醫뚰몴??媛??媛源뚯슫 ?щ씪?댁뒪 ?몃뜳??諛섑솚."""
     best_i, best_d = 0, float('inf')
     for i, (_, ds) in enumerate(pairs):
         try:
@@ -825,15 +898,15 @@ def _slice_pos_key(ds):
         return None
 
 
-# ─────────────────────────────────────────────────────────────
-#  그룹 동기화 매니저
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  洹몃９ ?숆린??留ㅻ땲?
+# ?????????????????????????????????????????????????????????????
 class GroupSyncManager:
     """Syncs scroll/WL/zoom/pan for a selected subset of DicomPanels.
 
     Activation paths:
-      • ∞ badge click  → ctrl_toggle(panel): add/remove that panel
-      • Ctrl+click     → ctrl_toggle(panel): add/remove individual panels
+      ????badge click  ??ctrl_toggle(panel): add/remove that panel
+      ??Ctrl+click     ??ctrl_toggle(panel): add/remove individual panels
                          + ctrl_add(active): always include current active panel
 
     _sync_set holds the currently synced panels.  is_active = len >= 2.
@@ -861,10 +934,10 @@ class GroupSyncManager:
         self._sync_set.discard(panel)
         self._refresh_all()
 
-    # ── toggle paths ─────────────────────────────────────────
+    # ?? toggle paths ?????????????????????????????????????????
 
     def toggle_badge(self):
-        """∞ badge: toggle between all-panels sync and off."""
+        """??badge: toggle between all-panels sync and off."""
         if self._sync_set == set(self._panels):
             self._sync_set.clear()
         else:
@@ -884,7 +957,7 @@ class GroupSyncManager:
         self._refresh_all()
 
     def ctrl_add(self, panel):
-        """Add panel to sync set only — never removes it (used for active-panel auto-include)."""
+        """Add panel to sync set only ??never removes it (used for active-panel auto-include)."""
         if panel not in self._sync_set:
             self._sync_set.add(panel)
             self._refresh_all()
@@ -904,7 +977,7 @@ class GroupSyncManager:
                 p._sync_badge.set_active(in_set)
             p.update()
 
-    # ── helpers ──────────────────────────────────────────────
+    # ?? helpers ??????????????????????????????????????????????
 
     def _src_world(self, src):
         """Return the 3-D center of src's current slice (broadcast position).
@@ -929,7 +1002,7 @@ class GroupSyncManager:
         except Exception:
             return None
 
-    # ── broadcast methods ────────────────────────────────────
+    # ?? broadcast methods ????????????????????????????????????
 
     def broadcast_scroll(self, src, delta=0):
         if not self.is_active or self._propagating or src not in self._sync_set:
@@ -941,8 +1014,8 @@ class GroupSyncManager:
             for p in self._sync_set:
                 if p is src or not p.series:
                     continue
-                # Same orientation → 3-D projection sync (anatomically correct)
-                # Cross-plane     → delta sync (scroll together step-for-step)
+                # Same orientation ??3-D projection sync (anatomically correct)
+                # Cross-plane     ??delta sync (scroll together step-for-step)
                 same_plane = (src_normal is not None
                               and p._series_normal is not None
                               and abs(float(np.dot(src_normal, p._series_normal))) > 0.9)
@@ -990,12 +1063,12 @@ class GroupSyncManager:
             self._propagating = False
 
 
-# ─────────────────────────────────────────────────────────────
-#  반응형 폰트 유틸리티
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  諛섏쓳???고듃 ?좏떥由ы떚
+# ?????????????????????????????????????????????????????????????
 def _fit_font_px(text_lines, avail_w, font_family="Consolas", min_px=9, max_px=20):
-    """text_lines 중 가장 긴 줄이 avail_w 안에 들어오는 최대 픽셀 크기를 반환.
-    min_px에서도 안 들어오면 min_px 반환 (호출자가 word-wrap 처리)."""
+    """text_lines 以?媛??湲?以꾩씠 avail_w ?덉뿉 ?ㅼ뼱?ㅻ뒗 理쒕? ?쎌? ?ш린瑜?諛섑솚.
+    min_px?먯꽌?????ㅼ뼱?ㅻ㈃ min_px 諛섑솚 (?몄텧?먭? word-wrap 泥섎━)."""
     if not text_lines or avail_w <= 0:
         return max_px
     for px in range(max_px, min_px - 1, -1):
@@ -1008,8 +1081,8 @@ def _fit_font_px(text_lines, avail_w, font_family="Consolas", min_px=9, max_px=2
 
 
 class AutoSizeLabel(QLabel):
-    """각 \\n 구분 줄이 위젯 너비 안에 한 줄로 들어오도록 폰트 크기를 자동 조정하는 QLabel.
-    min_px에서도 안 들어오면 word-wrap으로 두 줄 허용."""
+    """媛?\\n 援щ텇 以꾩씠 ?꾩젽 ?덈퉬 ?덉뿉 ??以꾨줈 ?ㅼ뼱?ㅻ룄濡??고듃 ?ш린瑜??먮룞 議곗젙?섎뒗 QLabel.
+    min_px?먯꽌?????ㅼ뼱?ㅻ㈃ word-wrap?쇰줈 ??以??덉슜."""
 
     def __init__(self, *args, font_family="Consolas", min_px=9, max_px=18,
                  h_pad=16, base_style="", **kwargs):
@@ -1051,9 +1124,9 @@ class AutoSizeLabel(QLabel):
             self._refreshing = False
 
 
-# ─────────────────────────────────────────────────────────────
-#  단일 DICOM 패널
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  ?⑥씪 DICOM ?⑤꼸
+# ?????????????????????????????????????????????????????????????
 class DicomPanel(QWidget):
     clicked       = pyqtSignal(object)
     cross_clicked = pyqtSignal(object, object)  # (panel, world_np_array)
@@ -1065,19 +1138,20 @@ class DicomPanel(QWidget):
         self.idx       = 0
         self.wl        = 40.0
         self.ww        = 400.0
-        self.initial_wl = None   # WL at series load time — used by Reset W/L
+        self.initial_wl = None   # WL at series load time ??used by Reset W/L
         self.initial_ww = None
         self.zoom      = 1.0
         self._raw_pix  = None
         self._disp_pix = None
         self._last_pos    = None
         self._drag_accum  = 0
-        self._drag_moved  = False      # 드래그 vs 클릭 구분
+        self._drag_moved  = False      # ?쒕옒洹?vs ?대┃ 援щ텇
         self._active      = False
         self._pixel_cache = {}
         self.show_tags    = True
-        self.cross_link   = False      # cross-reference 활성 여부
-        self._crosshair   = None       # (row_f, col_f) 이미지 좌표, None=없음
+        self.show_annotations = True
+        self.cross_link   = False      # cross-reference ?쒖꽦 ?щ?
+        self._crosshair   = None       # (row_f, col_f) ?대?吏 醫뚰몴, None=?놁쓬
         self.dwi_info            = None   # DWI position/b-value tables, or None
         self._bval_overlay       = None   # BValueOverlay child widget, or None
         self._active_bval_filter = None   # int b-value filter, or None = show all slices
@@ -1087,38 +1161,42 @@ class DicomPanel(QWidget):
         self._series_normal      = None   # unit np.ndarray slice normal, or None
         self._slice_centers      = []     # 3-D world centre (np.ndarray) per slice
         self._slice_projections  = []     # dot(centre, normal) per slice (float|None)
-        # Shift+드래그 (이미지 이동) — 1/2 속도 + axis lock
+        # Shift+?쒕옒洹?(?대?吏 ?대룞) ??1/2 ?띾룄 + axis lock
         self._gap_accum_x   = 0
         self._gap_accum_y   = 0
         self._gap_locked_ax = None     # None | 'x' | 'y'
-        # 이미지를 widget 안에서 가운데 → 안쪽으로 그릴 때의 추가 offset
-        # (letterbox 영역을 줄이는 phase. ViewerGrid가 외부에서 set)
+        # ?대?吏瑜?widget ?덉뿉??媛?대뜲 ???덉そ?쇰줈 洹몃┫ ?뚯쓽 異붽? offset
+        # (letterbox ?곸뿭??以꾩씠??phase. ViewerGrid媛 ?몃??먯꽌 set)
         self._paint_offset_x = 0
         self._paint_offset_y = 0
-        # 사용자 Panning offset (P 모드에서 좌클릭 드래그로 누적)
+        # ?ъ슜??Panning offset (P 紐⑤뱶?먯꽌 醫뚰겢由??쒕옒洹몃줈 ?꾩쟻)
         self._pan_offset_x = 0
         self._pan_offset_y = 0
+        self._annotations = []
+        self._ann_drag = None
+        self._ann_label_drag = None
+        self._ann_item_drag = None
 
         self.setMinimumSize(200, 200)
-        # 배경 transparent → letterbox 영역에 ViewerGrid의 검정이 비치고,
-        # 패널이 겹치면 다른 패널 이미지가 보임 (오버랩 가능)
+        # 諛곌꼍 transparent ??letterbox ?곸뿭??ViewerGrid??寃?뺤씠 鍮꾩튂怨?
+        # ?⑤꼸??寃뱀튂硫??ㅻⅨ ?⑤꼸 ?대?吏媛 蹂댁엫 (?ㅻ쾭??媛??
         self.setStyleSheet("background:transparent;")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAcceptDrops(True)
 
-    # ── 데이터 ───────────────────────────────────────────────
-    # self.series: [(filepath, header_ds), ...]  — 헤더만 보유
-    # self._pixel_cache: {idx: np.ndarray}       — 픽셀 캐시 (최근 N장)
+    # ?? ?곗씠?????????????????????????????????????????????????
+    # self.series: [(filepath, header_ds), ...]  ???ㅻ뜑留?蹂댁쑀
+    # self._pixel_cache: {idx: np.ndarray}       ???쎌? 罹먯떆 (理쒓렐 N??
 
     def load_series(self, file_header_pairs, start_idx=None):
         """
         file_header_pairs: [(Path, header_ds), ...]
-        header_ds 는 stop_before_pixels=True 로 읽은 헤더 전용 ds.
+        header_ds ??stop_before_pixels=True 濡??쎌? ?ㅻ뜑 ?꾩슜 ds.
         """
         self.series        = file_header_pairs
-        self._pixel_cache  = {}        # 캐시 초기화
+        self._pixel_cache  = {}        # 罹먯떆 珥덇린??
         if start_idx is not None:
             self.idx = max(0, min(len(file_header_pairs) - 1, start_idx))
         else:
@@ -1131,6 +1209,10 @@ class DicomPanel(QWidget):
         self._build_dwi_info()
         self._build_position_cache()
         self._setup_bvalue_overlay()
+        self._annotations = []
+        self._ann_drag = None
+        self._ann_label_drag = None
+        self._ann_item_drag = None
         self._render()
 
     def clear(self):
@@ -1144,17 +1226,21 @@ class DicomPanel(QWidget):
         self._series_normal      = None
         self._slice_centers      = []
         self._slice_projections  = []
+        self._annotations        = []
+        self._ann_drag           = None
+        self._ann_label_drag     = None
+        self._ann_item_drag      = None
         self._teardown_bvalue_overlay()
         self.update()
 
     def _get_ds(self):
-        """현재 슬라이스의 헤더 ds 반환."""
+        """?꾩옱 ?щ씪?댁뒪???ㅻ뜑 ds 諛섑솚."""
         if not self.series:
             return None
         return self.series[self.idx][1]
 
     def _get_pixel(self, idx):
-        """idx 슬라이스의 픽셀 배열 반환 (캐시 활용, 최대 40장 보관)."""
+        """idx ?щ씪?댁뒪???쎌? 諛곗뿴 諛섑솚 (罹먯떆 ?쒖슜, 理쒕? 40??蹂닿?)."""
         if idx in self._pixel_cache:
             return self._pixel_cache[idx]
         if idx < 0 or idx >= len(self.series):
@@ -1168,7 +1254,7 @@ class DicomPanel(QWidget):
             arr = arr * slope + intercept
         except Exception:
             return None
-        # 캐시 크기 제한 (40장)
+        # 罹먯떆 ?ш린 ?쒗븳 (40??
         if len(self._pixel_cache) >= 40:
             oldest = next(iter(self._pixel_cache))
             del self._pixel_cache[oldest]
@@ -1205,7 +1291,7 @@ class DicomPanel(QWidget):
         hi = self.wl + self.ww / 2
         return ((np.clip(arr, lo, hi) - lo) / (hi - lo) * 255).astype(np.uint8)
 
-    # ── 렌더링 ───────────────────────────────────────────────
+    # ?? ?뚮뜑留????????????????????????????????????????????????
     def _render(self):
         try:
             arr = self._get_array()
@@ -1214,17 +1300,17 @@ class DicomPanel(QWidget):
                 self.update()
                 return
 
-            # 다채널 / 다프레임 처리 — _apply_wl 전에 2D로 축소
-            # 1) 3D인데 (frames, H, W) 또는 (H, W, channels) 형태일 수 있음
+            # ?ㅼ콈??/ ?ㅽ봽?덉엫 泥섎━ ??_apply_wl ?꾩뿉 2D濡?異뺤냼
+            # 1) 3D?몃뜲 (frames, H, W) ?먮뒗 (H, W, channels) ?뺥깭?????덉쓬
             if arr.ndim == 3:
-                # (H, W, 3 or 4) → 그레이스케일 (luminance)
+                # (H, W, 3 or 4) ??洹몃젅?댁뒪耳??(luminance)
                 if arr.shape[2] in (3, 4):
-                    # RGB/RGBA → 표준 luminance
+                    # RGB/RGBA ???쒖? luminance
                     arr = (arr[..., 0] * 0.299
                            + arr[..., 1] * 0.587
                            + arr[..., 2] * 0.114)
                 else:
-                    # (frames, H, W) — 첫 프레임만 사용
+                    # (frames, H, W) ??泥??꾨젅?꾨쭔 ?ъ슜
                     arr = arr[0]
             elif arr.ndim == 4:
                 # (frames, H, W, channels)
@@ -1236,7 +1322,7 @@ class DicomPanel(QWidget):
                 else:
                     arr = f0[0] if f0.ndim == 3 else f0
             elif arr.ndim != 2:
-                # 알 수 없는 형태 — 안전하게 빈 화면
+                # ?????녿뒗 ?뺥깭 ???덉쟾?섍쾶 鍮??붾㈃
                 self._raw_pix = self._disp_pix = None
                 self.update()
                 return
@@ -1251,7 +1337,7 @@ class DicomPanel(QWidget):
             self._raw_pix = QPixmap.fromImage(qimg)
             self._make_display()
         except Exception as e:
-            # 한 패널의 렌더 실패가 전체 페이지 로드를 깨트리지 않도록
+            # ???⑤꼸???뚮뜑 ?ㅽ뙣媛 ?꾩껜 ?섏씠吏 濡쒕뱶瑜?源⑦듃由ъ? ?딅룄濡?
             import traceback; traceback.print_exc()
             self._raw_pix = self._disp_pix = None
             self.update()
@@ -1259,7 +1345,7 @@ class DicomPanel(QWidget):
     def _make_display(self):
         if self._raw_pix is None:
             return
-        # 패널 크기에 맞게 꽉 채우는 base scale 계산 (zoom=1.0 = fit)
+        # ?⑤꼸 ?ш린??留욊쾶 苑?梨꾩슦??base scale 怨꾩궛 (zoom=1.0 = fit)
         pw, ph = self.width(), self.height()
         if pw < 1 or ph < 1:
             return
@@ -1279,7 +1365,7 @@ class DicomPanel(QWidget):
         result  = QPixmap(scaled)
         W, H    = result.width(), result.height()
 
-        # ── Cross-reference 교차선 (이미지에 묶인 요소만 — _disp_pix에 그림) ─
+        # ?? Cross-reference 援먯감??(?대?吏??臾띠씤 ?붿냼留???_disp_pix??洹몃┝) ?
         if self._crosshair is not None:
             painter = QPainter(result)
             row_f, col_f = self._crosshair
@@ -1296,7 +1382,7 @@ class DicomPanel(QWidget):
 
         self._disp_pix = result
         self.update()
-        # _disp_pix 크기 변경 → letterbox 크기 변경 → ViewerGrid가 paint offset 재계산해야
+        # _disp_pix ?ш린 蹂寃???letterbox ?ш린 蹂寃???ViewerGrid媛 paint offset ?ш퀎?고빐??
         par = self.parent()
         if par is not None and hasattr(par, '_relayout_panels'):
             par._relayout_panels()
@@ -1305,7 +1391,7 @@ class DicomPanel(QWidget):
         if self._sync_badge is not None:
             self._update_sync_badge()
 
-    # _make_display 끝 위치 마커 — 텍스트/테두리는 paintEvent에서 그림
+    # _make_display ???꾩튂 留덉빱 ???띿뒪???뚮몢由щ뒗 paintEvent?먯꽌 洹몃┝
 
     def set_active(self, v):
         self._active = v
@@ -1313,6 +1399,14 @@ class DicomPanel(QWidget):
 
     def toggle_tags(self, state=None):
         self.show_tags = (not self.show_tags) if state is None else state
+        self._refresh_overlay_visibility()
+
+    def set_overlay_visibility(self, show_tags=True, show_annotations=True):
+        self.show_tags = bool(show_tags)
+        self.show_annotations = bool(show_annotations)
+        self._refresh_overlay_visibility()
+
+    def _refresh_overlay_visibility(self):
         if self._bval_overlay is not None:
             if self.show_tags:
                 self._update_bvalue_overlay()
@@ -1330,32 +1424,32 @@ class DicomPanel(QWidget):
         if self._raw_pix:
             self._make_display()
 
-    # ── 그리기 ───────────────────────────────────────────────
+    # ?? 洹몃━湲????????????????????????????????????????????????
     def paintEvent(self, event):
         p = QPainter(self)
-        # background 그리지 않음 — WA_TranslucentBackground로 letterbox 영역이 transparent
+        # background 洹몃━吏 ?딆쓬 ??WA_TranslucentBackground濡?letterbox ?곸뿭??transparent
         if self._disp_pix:
-            # zoom 1.0 시점의 letterbox(이미지가 들어가는) 영역 계산.
-            # 이 영역으로 clip해서, zoom으로 _disp_pix가 커져도 인접 패널 영역을 침범하지 않게 함.
+            # zoom 1.0 ?쒖젏??letterbox(?대?吏媛 ?ㅼ뼱媛?? ?곸뿭 怨꾩궛.
+            # ???곸뿭?쇰줈 clip?댁꽌, zoom?쇰줈 _disp_pix媛 而ㅼ졇???몄젒 ?⑤꼸 ?곸뿭??移⑤쾾?섏? ?딄쾶 ??
             zoom = max(0.001, float(self.zoom))
             base_w = int(round(self._disp_pix.width()  / zoom))
             base_h = int(round(self._disp_pix.height() / zoom))
-            # base 영역의 좌상단 — paint_offset(갭 조절)은 따라가지만 pan_offset은 미적용
-            # (panning은 zoom 이미지 안에서 다른 부분을 보는 거니까 clip 영역은 고정)
+            # base ?곸뿭??醫뚯긽????paint_offset(媛?議곗젅)? ?곕씪媛吏留?pan_offset? 誘몄쟻??
+            # (panning? zoom ?대?吏 ?덉뿉???ㅻⅨ 遺遺꾩쓣 蹂대뒗 嫄곕땲源?clip ?곸뿭? 怨좎젙)
             cx = (self.width()  - base_w) // 2 + self._paint_offset_x
             cy = (self.height() - base_h) // 2 + self._paint_offset_y
             p.setClipRect(cx, cy, base_w, base_h)
 
-            # 실제 그릴 위치 (paint + pan offset 모두 적용)
+            # ?ㅼ젣 洹몃┫ ?꾩튂 (paint + pan offset 紐⑤몢 ?곸슜)
             x = ((self.width()  - self._disp_pix.width())  // 2
                  + self._paint_offset_x + self._pan_offset_x)
             y = ((self.height() - self._disp_pix.height()) // 2
                  + self._paint_offset_y + self._pan_offset_y)
             p.drawPixmap(x, y, self._disp_pix)
 
-            # ── clip 해제 후 letterbox 영역 위에 텍스트/테두리 오버레이 ──
-            # zoom과 무관하게 항상 letterbox 안 가장자리에 표시되도록 paintEvent에서 그림
-            p.setClipRect(cx, cy, base_w, base_h)   # 글자/테두리도 letterbox 영역만
+            # ?? clip ?댁젣 ??letterbox ?곸뿭 ?꾩뿉 ?띿뒪???뚮몢由??ㅻ쾭?덉씠 ??
+            # zoom怨?臾닿??섍쾶 ??긽 letterbox ??媛?μ옄由ъ뿉 ?쒖떆?섎룄濡?paintEvent?먯꽌 洹몃┝
+            p.setClipRect(cx, cy, base_w, base_h)   # 湲???뚮몢由щ룄 letterbox ?곸뿭留?
             self._paint_overlay(p, cx, cy, base_w, base_h)
             p.setClipping(False)
         else:
@@ -1372,8 +1466,8 @@ class DicomPanel(QWidget):
                 p.drawRect(1, 1, self.width() - 2, self.height() - 2)
 
     def _paint_overlay(self, painter, cx, cy, cw, ch):
-        """letterbox 영역 (cx,cy,cw,ch) 위에 DICOM 태그 텍스트 + 활성 테두리 그리기.
-        zoom의 영향을 받지 않아 항상 letterbox 가장자리에 위치."""
+        """letterbox ?곸뿭 (cx,cy,cw,ch) ?꾩뿉 DICOM ?쒓렇 ?띿뒪??+ ?쒖꽦 ?뚮몢由?洹몃━湲?
+        zoom???곹뼢??諛쏆? ?딆븘 ??긽 letterbox 媛?μ옄由ъ뿉 ?꾩튂."""
         _fpx = max(8, min(13, round(cw * 0.011)))
         FONT = QFont("Consolas")
         FONT.setPixelSize(_fpx)
@@ -1382,15 +1476,15 @@ class DicomPanel(QWidget):
         M  = 5
 
         def draw_text(x_local, y_local, text, right=False):
-            """letterbox 좌상단 기준 (x_local, y_local) 위치에 황색 그림자 텍스트.
-            right=True면 letterbox 우측 정렬."""
+            """letterbox 醫뚯긽??湲곗? (x_local, y_local) ?꾩튂???⑹깋 洹몃┝???띿뒪??
+            right=True硫?letterbox ?곗륫 ?뺣젹."""
             if not text or not text.strip():
                 return
             if right:
-                # 우측 정렬용 rect = letterbox 영역
+                # ?곗륫 ?뺣젹??rect = letterbox ?곸뿭
                 rect = QRect(cx, cy + y_local - LH + 2, cw - M, LH)
                 flags = (Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
-                # 그림자
+                # 洹몃┝??
                 rect_s = QRect(cx + 1, cy + y_local - LH + 3, cw - M, LH)
                 painter.setPen(QColor(0, 0, 0, 200))
                 painter.drawText(rect_s, flags, text)
@@ -1403,45 +1497,527 @@ class DicomPanel(QWidget):
                 painter.setPen(QColor(255, 255, 0))
                 painter.drawText(ax, ay, text)
 
-        # WL / WW / Zoom (T 토글 대상)
+        # WL / WW / Zoom (T ?좉? ???
         if self.show_tags:
-            wl_str = f"WL {self.wl:.0f}  WW {self.ww:.0f}   {self.zoom:.1f}×"
+            wl_str = f"WL {self.wl:.0f}  WW {self.ww:.0f}   {self.zoom:.1f}x"
             draw_text(M, ch - 6, wl_str)
 
-        # DICOM 태그 4-corner 오버레이
+        # DICOM ?쒓렇 4-corner ?ㅻ쾭?덉씠
         if self.show_tags and self.series:
             ds = self._get_ds()
             if ds is not None:
                 v_idx, v_total = self._virtual_idx_total()
                 tl, tr, bl, br = build_overlay(ds, v_idx, v_total)
-                # 상단 좌
+                # ?곷떒 醫?
                 for i, line in enumerate(tl):
                     draw_text(M, M + LH * i + LH, line)
-                # 상단 우
+                # ?곷떒 ??
                 for i, line in enumerate(tr):
                     draw_text(M, M + LH * i + LH, line, right=True)
-                # 하단 좌 (WL 줄 위로)
+                # ?섎떒 醫?(WL 以??꾨줈)
                 base = ch - 6 - LH
                 for i, line in enumerate(reversed(bl)):
                     draw_text(M, base - LH * i, line)
-                # 하단 우
+                # ?섎떒 ??
                 for i, line in enumerate(reversed(br)):
                     draw_text(M, base - LH * i, line, right=True)
 
-        # 활성 패널 파란 테두리 — letterbox 영역 가장자리에 (clip 안에 들어옴)
+        # ?쒖꽦 ?⑤꼸 ?뚮? ?뚮몢由???letterbox ?곸뿭 媛?μ옄由ъ뿉 (clip ?덉뿉 ?ㅼ뼱??
         if self._active:
             painter.setPen(QPen(QColor(0, 160, 255), 3))
             painter.drawRect(cx + 1, cy + 1, cw - 2, ch - 2)
 
-        # Ctrl-선택된 sync 패널 — 황금색 2px 테두리
+        # Ctrl-?좏깮??sync ?⑤꼸 ???⑷툑??2px ?뚮몢由?
         if getattr(self, '_sync_selected', False):
             painter.setPen(QPen(QColor(255, 215, 0), 2))
             painter.drawRect(cx + 2, cy + 2, cw - 4, ch - 4)
 
-    # ── 마우스 ───────────────────────────────────────────────
+        if self.show_annotations:
+            self._paint_annotations(painter)
+
+    def _slice_key(self):
+        if not self.series or self.idx < 0 or self.idx >= len(self.series):
+            return None
+        try:
+            return str(self.series[self.idx][0])
+        except Exception:
+            return str(self.idx)
+
+    def _image_to_screen(self, row_f, col_f):
+        if self._raw_pix is None or self._disp_pix is None:
+            return None
+        iw = self._raw_pix.width()
+        ih = self._raw_pix.height()
+        dw = self._disp_pix.width()
+        dh = self._disp_pix.height()
+        if iw <= 0 or ih <= 0 or dw <= 0 or dh <= 0:
+            return None
+        ox = (self.width() - dw) // 2 + self._paint_offset_x + self._pan_offset_x
+        oy = (self.height() - dh) // 2 + self._paint_offset_y + self._pan_offset_y
+        return (ox + col_f * dw / iw, oy + row_f * dh / ih)
+
+    def _pixel_spacing(self):
+        ds = self._get_ds()
+        try:
+            ps = [float(x) for x in ds.PixelSpacing]
+            return ps[0], ps[1]
+        except Exception:
+            return None, None
+
+    def _current_2d_array(self):
+        arr = self._get_array()
+        if arr is None:
+            return None
+        if arr.ndim == 2:
+            return arr
+        if arr.ndim == 3:
+            if arr.shape[2] in (3, 4):
+                return (arr[..., 0] * 0.299 + arr[..., 1] * 0.587 + arr[..., 2] * 0.114)
+            return arr[0]
+        if arr.ndim == 4:
+            f0 = arr[0]
+            if f0.ndim == 3 and f0.shape[2] in (3, 4):
+                return (f0[..., 0] * 0.299 + f0[..., 1] * 0.587 + f0[..., 2] * 0.114)
+            return f0[0] if f0.ndim == 3 else f0
+        return None
+
+    def _annotation_unit(self):
+        ds = self._get_ds()
+        modality = str(getattr(ds, 'Modality', '') or '').upper() if ds else ''
+        return 'HU' if modality == 'CT' else 'SI'
+
+    def _format_length(self, p1, p2):
+        r1, c1 = p1
+        r2, c2 = p2
+        row_sp, col_sp = self._pixel_spacing()
+        if row_sp is not None and col_sp is not None:
+            mm = math.hypot((r2 - r1) * row_sp, (c2 - c1) * col_sp)
+            return f"{mm:.1f} mm"
+        return f"{math.hypot(r2 - r1, c2 - c1):.1f} px"
+
+    def _roi_stats(self, p1, p2):
+        arr = self._current_2d_array()
+        if arr is None:
+            return None
+        h, w = arr.shape[:2]
+        r1, c1 = p1
+        r2, c2 = p2
+        rmin = max(0, int(math.floor(min(r1, r2))))
+        rmax = min(h - 1, int(math.ceil(max(r1, r2))))
+        cmin = max(0, int(math.floor(min(c1, c2))))
+        cmax = min(w - 1, int(math.ceil(max(c1, c2))))
+        if rmax <= rmin or cmax <= cmin:
+            return None
+        cy = (r1 + r2) / 2.0
+        cx = (c1 + c2) / 2.0
+        ry = max(0.5, abs(r2 - r1) / 2.0)
+        rx = max(0.5, abs(c2 - c1) / 2.0)
+        yy, xx = np.ogrid[rmin:rmax + 1, cmin:cmax + 1]
+        mask = ((yy - cy) / ry) ** 2 + ((xx - cx) / rx) ** 2 <= 1.0
+        vals = arr[rmin:rmax + 1, cmin:cmax + 1][mask]
+        if vals.size == 0:
+            return None
+        row_sp, col_sp = self._pixel_spacing()
+        area = (f"{vals.size * row_sp * col_sp:.1f} mm2"
+                if row_sp is not None and col_sp is not None
+                else f"{vals.size} px2")
+        return {
+            'area': area,
+            'mean': float(np.mean(vals)),
+            'min': float(np.min(vals)),
+            'max': float(np.max(vals)),
+            'sd': float(np.std(vals)),
+            'unit': self._annotation_unit(),
+        }
+
+    def _annotation_label_rect(self, x, y, lines, item=None):
+        if not lines:
+            return None
+        font = QFont("Consolas")
+        font.setPixelSize(12)
+        fm = QFontMetrics(font)
+        pad = 4
+        width = max(fm.horizontalAdvance(line) for line in lines) + pad * 2
+        height = len(lines) * (fm.height() + 1) + pad * 2
+        offset = item.get('label_offset', (8, -height - 8)) if item else (8, -height - 8)
+        rx = int(x + offset[0])
+        ry = int(y + offset[1])
+        if ry < 2:
+            ry = int(y + 8)
+        rx = max(2, min(rx, max(2, self.width() - width - 2)))
+        ry = max(2, min(ry, max(2, self.height() - height - 2)))
+        return QRect(rx, ry, width, height)
+
+    def _draw_annotation_label(self, painter, x, y, lines, color, item=None):
+        rect = self._annotation_label_rect(x, y, lines, item)
+        if rect is None:
+            return
+        font = QFont("Consolas")
+        font.setPixelSize(12)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+        pad = 4
+        rx = rect.x()
+        ry = rect.y()
+        painter.fillRect(rect, QColor(0, 0, 0, 170))
+        painter.setPen(color)
+        for i, line in enumerate(lines):
+            painter.drawText(rx + pad, ry + pad + fm.ascent() + i * (fm.height() + 1), line)
+
+    def _draw_arrow_head(self, painter, x1, y1, x2, y2, color):
+        angle = math.atan2(y2 - y1, x2 - x1)
+        size = 12
+        for delta in (150, -150):
+            a = angle + math.radians(delta)
+            px = x2 + math.cos(a) * size
+            py = y2 + math.sin(a) * size
+            painter.drawLine(int(x2), int(y2), int(px), int(py))
+
+    def _paint_one_annotation(self, painter, item, preview=False):
+        kind = item.get('type')
+        color = QColor(0, 255, 170) if kind == 'roi' else QColor(255, 210, 0)
+        if kind == 'arrow':
+            color = QColor(255, 145, 0)
+        elif kind == 'text':
+            color = QColor(255, 255, 255)
+        painter.setPen(QPen(color, 2, Qt.PenStyle.DashLine if preview else Qt.PenStyle.SolidLine))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        if kind in ('measure', 'arrow'):
+            a = self._image_to_screen(*item['p1'])
+            b = self._image_to_screen(*item['p2'])
+            if a is None or b is None:
+                return
+            x1, y1 = a
+            x2, y2 = b
+            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+            if kind == 'arrow':
+                self._draw_arrow_head(painter, x1, y1, x2, y2, color)
+            else:
+                label = item.get('label') or self._format_length(item['p1'], item['p2'])
+                self._draw_annotation_label(painter, (x1 + x2) / 2, (y1 + y2) / 2,
+                                            [label], color, item)
+            return
+
+        if kind == 'roi':
+            a = self._image_to_screen(*item['p1'])
+            b = self._image_to_screen(*item['p2'])
+            if a is None or b is None:
+                return
+            x1, y1 = a
+            x2, y2 = b
+            painter.drawEllipse(int(min(x1, x2)), int(min(y1, y2)),
+                                int(abs(x2 - x1)), int(abs(y2 - y1)))
+            stats = item.get('stats')
+            if stats:
+                unit = stats.get('unit', '')
+                lines = [
+                    f"ROI {stats['area']}",
+                    f"Mean {stats['mean']:.1f} {unit}",
+                    f"Min {stats['min']:.1f}  Max {stats['max']:.1f}",
+                    f"SD {stats['sd']:.1f}",
+                ]
+                self._draw_annotation_label(painter, max(x1, x2), min(y1, y2), lines, color, item)
+            return
+
+        if kind == 'text':
+            a = self._image_to_screen(*item['pos'])
+            if a is not None:
+                self._draw_annotation_label(painter, a[0], a[1], [item.get('text', '')], color, item)
+
+    def _annotation_label_info(self, item):
+        kind = item.get('type')
+        if kind == 'measure':
+            a = self._image_to_screen(*item['p1'])
+            b = self._image_to_screen(*item['p2'])
+            if a is None or b is None:
+                return None, None
+            label = item.get('label') or self._format_length(item['p1'], item['p2'])
+            return ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2), [label]
+        if kind == 'roi':
+            a = self._image_to_screen(*item['p1'])
+            b = self._image_to_screen(*item['p2'])
+            stats = item.get('stats')
+            if a is None or b is None or not stats:
+                return None, None
+            x1, y1 = a
+            x2, y2 = b
+            unit = stats.get('unit', '')
+            lines = [
+                f"ROI {stats['area']}",
+                f"Mean {stats['mean']:.1f} {unit}",
+                f"Min {stats['min']:.1f}  Max {stats['max']:.1f}",
+                f"SD {stats['sd']:.1f}",
+            ]
+            return (max(x1, x2), min(y1, y2)), lines
+        if kind == 'text':
+            a = self._image_to_screen(*item['pos'])
+            if a is None:
+                return None, None
+            return a, [item.get('text', '')]
+        return None, None
+
+    def _annotation_label_at(self, pos):
+        key = self._slice_key()
+        if key is None:
+            return None, None, None
+        for item in reversed(self._annotations):
+            if item.get('slice') != key:
+                continue
+            anchor, lines = self._annotation_label_info(item)
+            if anchor is None or not lines:
+                continue
+            rect = self._annotation_label_rect(anchor[0], anchor[1], lines, item)
+            if rect is not None and rect.adjusted(-4, -4, 4, 4).contains(pos):
+                return item, anchor, rect
+        return None, None, None
+
+    def _distance_to_segment(self, px, py, ax, ay, bx, by):
+        vx = bx - ax
+        vy = by - ay
+        wx = px - ax
+        wy = py - ay
+        denom = vx * vx + vy * vy
+        if denom <= 1e-6:
+            return math.hypot(px - ax, py - ay)
+        t = max(0.0, min(1.0, (wx * vx + wy * vy) / denom))
+        cx = ax + t * vx
+        cy = ay + t * vy
+        return math.hypot(px - cx, py - cy)
+
+    def _annotation_body_at(self, pos):
+        key = self._slice_key()
+        if key is None:
+            return None
+        px = pos.x()
+        py = pos.y()
+        for item in reversed(self._annotations):
+            if item.get('slice') != key:
+                continue
+            kind = item.get('type')
+            if kind in ('measure', 'arrow'):
+                a = self._image_to_screen(*item['p1'])
+                b = self._image_to_screen(*item['p2'])
+                if a is None or b is None:
+                    continue
+                if self._distance_to_segment(px, py, a[0], a[1], b[0], b[1]) <= 7:
+                    return item
+            elif kind == 'roi':
+                a = self._image_to_screen(*item['p1'])
+                b = self._image_to_screen(*item['p2'])
+                if a is None or b is None:
+                    continue
+                x1, y1 = a
+                x2, y2 = b
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                rx = max(4.0, abs(x2 - x1) / 2.0)
+                ry = max(4.0, abs(y2 - y1) / 2.0)
+                norm = ((px - cx) / rx) ** 2 + ((py - cy) / ry) ** 2
+                if norm <= 1.12:
+                    return item
+            elif kind == 'text':
+                anchor, lines = self._annotation_label_info(item)
+                if anchor is None or not lines:
+                    continue
+                rect = self._annotation_label_rect(anchor[0], anchor[1], lines, item)
+                if rect is not None and rect.adjusted(-4, -4, 4, 4).contains(pos):
+                    return item
+        return None
+
+    def _start_annotation_item_drag(self, item, row, col):
+        saved = {'type': item.get('type'), 'slice': item.get('slice')}
+        for key in ('p1', 'p2', 'pos', 'label_offset'):
+            if key in item:
+                value = item[key]
+                saved[key] = tuple(value) if isinstance(value, (list, tuple)) else value
+        self._ann_item_drag = {
+            'item': item,
+            'row': row,
+            'col': col,
+            'saved': saved,
+        }
+
+    def _move_annotation_item(self, pos):
+        if self._ann_item_drag is None:
+            return False
+        row, col = self._screen_to_image(pos.x(), pos.y())
+        if row is None:
+            return True
+        drag = self._ann_item_drag
+        item = drag['item']
+        saved = drag['saved']
+        dr = row - drag['row']
+        dc = col - drag['col']
+        if 'p1' in saved and 'p2' in saved:
+            item['p1'] = (saved['p1'][0] + dr, saved['p1'][1] + dc)
+            item['p2'] = (saved['p2'][0] + dr, saved['p2'][1] + dc)
+        if 'pos' in saved:
+            item['pos'] = (saved['pos'][0] + dr, saved['pos'][1] + dc)
+        if 'label_offset' in saved:
+            item['label_offset'] = saved['label_offset']
+        self.update()
+        return True
+
+    def _paint_annotations(self, painter):
+        key = self._slice_key()
+        if key is None:
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        for item in self._annotations:
+            if item.get('slice') == key:
+                self._paint_one_annotation(painter, item)
+        if self._ann_drag is not None and self._ann_drag.get('slice') == key:
+            self._paint_one_annotation(painter, self._ann_drag, preview=True)
+
+    def _annotation_tool(self):
+        return getattr(self.window(), '_annotation_tool', 'none')
+
+    def _annotation_error(self, exc):
+        import traceback
+        traceback.print_exc()
+        self._ann_drag = None
+        win = self.window()
+        if hasattr(win, 'statusBar'):
+            win.statusBar().showMessage(f"Annotation error: {exc}", 5000)
+        self.update()
+
+    def _annotation_press(self, pos):
+        try:
+            tool = self._annotation_tool()
+            item, anchor, rect = self._annotation_label_at(pos)
+            if item is not None:
+                self._ann_label_drag = {
+                    'item': item,
+                    'anchor': anchor,
+                    'grab_dx': pos.x() - rect.x(),
+                    'grab_dy': pos.y() - rect.y(),
+                }
+                return True
+            row, col = self._screen_to_image(pos.x(), pos.y())
+            if row is None:
+                return False
+            key = self._slice_key()
+            if key is None:
+                return False
+            item = self._annotation_body_at(pos)
+            if item is not None:
+                self._start_annotation_item_drag(item, row, col)
+                return True
+            if tool == 'text':
+                text, ok = QInputDialog.getText(self, "Text Annotation", "Text:")
+                if ok and text:
+                    self._annotations.append({'type': 'text', 'slice': key, 'pos': (row, col), 'text': text})
+                    self.update()
+                return True
+            if tool in ('measure', 'arrow', 'roi'):
+                self._ann_drag = {'type': tool, 'slice': key, 'p1': (row, col), 'p2': (row, col)}
+                return True
+            return False
+        except Exception as exc:
+            self._annotation_error(exc)
+            return True
+
+    def _annotation_move(self, pos):
+        try:
+            if self._ann_item_drag is not None:
+                return self._move_annotation_item(pos)
+            if self._ann_label_drag is not None:
+                item = self._ann_label_drag['item']
+                ax, ay = self._ann_label_drag['anchor']
+                dx = pos.x() - self._ann_label_drag['grab_dx'] - ax
+                dy = pos.y() - self._ann_label_drag['grab_dy'] - ay
+                item['label_offset'] = (dx, dy)
+                self.update()
+                return True
+            if self._ann_drag is None:
+                return False
+            row, col = self._screen_to_image(pos.x(), pos.y())
+            if row is not None:
+                self._ann_drag['p2'] = (row, col)
+                self.update()
+            return True
+        except Exception as exc:
+            self._annotation_error(exc)
+            return True
+
+    def _annotation_release(self, pos):
+        try:
+            if self._ann_item_drag is not None:
+                self._move_annotation_item(pos)
+                item = self._ann_item_drag['item']
+                self._ann_item_drag = None
+                if item.get('type') == 'measure':
+                    item['label'] = self._format_length(item['p1'], item['p2'])
+                elif item.get('type') == 'roi':
+                    stats = self._roi_stats(item['p1'], item['p2'])
+                    if stats is not None:
+                        item['stats'] = stats
+                self.update()
+                return True
+            if self._ann_label_drag is not None:
+                self._annotation_move(pos)
+                self._ann_label_drag = None
+                return True
+            if self._ann_drag is None:
+                return False
+            row, col = self._screen_to_image(pos.x(), pos.y())
+            item = self._ann_drag
+            self._ann_drag = None
+            if row is None:
+                self.update()
+                return True
+            item['p2'] = (row, col)
+            r1, c1 = item['p1']
+            if math.hypot(row - r1, col - c1) < 2:
+                self.update()
+                return True
+            if item['type'] == 'measure':
+                item['label'] = self._format_length(item['p1'], item['p2'])
+            elif item['type'] == 'roi':
+                stats = self._roi_stats(item['p1'], item['p2'])
+                if stats is None:
+                    self.update()
+                    return True
+                item['stats'] = stats
+            self._annotations.append(item)
+            self.update()
+            return True
+        except Exception as exc:
+            self._annotation_error(exc)
+            return True
+
+    def delete_last_annotation(self):
+        key = self._slice_key()
+        for i in range(len(self._annotations) - 1, -1, -1):
+            if self._annotations[i].get('slice') == key:
+                del self._annotations[i]
+                self.update()
+                return True
+        return False
+
+    def delete_annotation(self, item):
+        try:
+            self._annotations.remove(item)
+        except ValueError:
+            return False
+        self._ann_drag = None
+        self._ann_label_drag = None
+        self._ann_item_drag = None
+        self.update()
+        return True
+
+    def clear_annotations(self):
+        self._annotations = []
+        self._ann_drag = None
+        self._ann_label_drag = None
+        self._ann_item_drag = None
+        self.update()
+
+    # ?? 留덉슦?????????????????????????????????????????????????
     def mousePressEvent(self, event):
-        # 갭 줄임/오버랩 상태에서 z-order 기반으로 진짜 보이는 패널을 찾아 위임.
-        # QMouseEvent 재생성은 PyQt 버전 간 시그니처 차이로 위험 → 직접 상태만 셋업.
+        # 媛?以꾩엫/?ㅻ쾭???곹깭?먯꽌 z-order 湲곕컲?쇰줈 吏꾩쭨 蹂댁씠???⑤꼸??李얠븘 ?꾩엫.
+        # QMouseEvent ?ъ깮?깆? PyQt 踰꾩쟾 媛??쒓렇?덉쿂 李⑥씠濡??꾪뿕 ??吏곸젒 ?곹깭留??뗭뾽.
         vg   = self.parentWidget()
         real = self
         r    = None      # panel whose letterbox contains the click (or None)
@@ -1453,13 +2029,13 @@ class DicomPanel(QWidget):
             if r is not None:
                 real = r
 
-        # Ctrl+click → toggle clicked panel + auto-include the currently active panel
+        # Ctrl+click ??toggle clicked panel + auto-include the currently active panel
         if (event.button() == Qt.MouseButton.LeftButton
                 and event.modifiers() & Qt.KeyboardModifier.ControlModifier):
             sm = real.sync_manager
             if sm is not None:
                 sm.ctrl_toggle(real)
-                # In overlap mode self may differ from real — include it too
+                # In overlap mode self may differ from real ??include it too
                 if self is not real and self.sync_manager is not None:
                     self.sync_manager.ctrl_toggle(self)
                 # Auto-include the currently active panel so the user never has
@@ -1475,6 +2051,54 @@ class DicomPanel(QWidget):
             event.accept()
             return
 
+        if (event.button() == Qt.MouseButton.LeftButton
+                and not (event.modifiers() & Qt.KeyboardModifier.ControlModifier)):
+            ann_pos = QPoint(gx - real.x(), gy - real.y()) if real is not self else event.pos()
+            label_item, _anchor, _rect = real._annotation_label_at(ann_pos)
+            body_item = real._annotation_body_at(ann_pos)
+            if (label_item is not None or body_item is not None) and real._annotation_press(ann_pos):
+                if vg is not None and hasattr(vg, '_activate'):
+                    vg._activate(real)
+                if real is not self:
+                    real.grabMouse()
+                event.accept()
+                return
+
+        if event.button() == Qt.MouseButton.RightButton:
+            ann_pos = QPoint(gx - real.x(), gy - real.y()) if real is not self else event.pos()
+            label_item, _anchor, _rect = real._annotation_label_at(ann_pos)
+            body_item = real._annotation_body_at(ann_pos)
+            item = label_item or body_item
+            if item is not None:
+                if vg is not None and hasattr(vg, '_activate'):
+                    vg._activate(real)
+                menu = QMenu(real)
+                delete_action = menu.addAction("Delete?")
+                chosen = menu.exec(event.globalPosition().toPoint())
+                if chosen is delete_action and real.delete_annotation(item):
+                    win = real.window()
+                    if hasattr(win, 'statusBar'):
+                        win.statusBar().showMessage("Annotation deleted", 2500)
+                event.accept()
+                return
+
+        if (event.button() == Qt.MouseButton.LeftButton
+                and getattr(self.window(), '_annotation_tool', 'none') != 'none'):
+            if vg is not None and hasattr(vg, 'active_panel') and real is not vg.active_panel:
+                vg._activate(real)
+                event.accept()
+                return
+            if real is not self and vg is not None:
+                vg._activate(real)
+                ann_pos = QPoint(gx - real.x(), gy - real.y())
+            else:
+                ann_pos = event.pos()
+            if real._annotation_press(ann_pos):
+                if real is not self:
+                    real.grabMouse()
+                event.accept()
+                return
+
         # Plain left click: clear sync group when clicking a non-member viewport
         # or the black letterbox area.  Badge clicks never reach here (child accepts).
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1488,7 +2112,7 @@ class DicomPanel(QWidget):
                     sm.ctrl_clear()
 
         if real is not self:
-            # 활성 패널 전환 + 드래그 동안의 좌표 추적은 real이 담당
+            # ?쒖꽦 ?⑤꼸 ?꾪솚 + ?쒕옒洹??숈븞??醫뚰몴 異붿쟻? real???대떦
             vg._activate(real)
             real._last_pos   = QPoint(gx - real.x(), gy - real.y())
             real._drag_accum = 0
@@ -1496,9 +2120,9 @@ class DicomPanel(QWidget):
             real._gap_accum_x   = 0
             real._gap_accum_y   = 0
             real._gap_locked_ax = None
-            # 이후 mouse move/release는 grabMouse로 real이 받음
+            # ?댄썑 mouse move/release??grabMouse濡?real??諛쏆쓬
             real.grabMouse()
-            # Panning 모드 + 좌클릭 → 닫힌 손
+            # Panning 紐⑤뱶 + 醫뚰겢由????ロ엺 ??
             if (event.button() == Qt.MouseButton.LeftButton
                     and getattr(self.window(), '_pan_mode', False)):
                 real.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -1508,36 +2132,42 @@ class DicomPanel(QWidget):
         self._last_pos   = event.pos()
         self._drag_accum = 0
         self._drag_moved = False
-        # Shift+드래그 누적/lock 리셋 (새 드래그 세션 시작)
+        # Shift+?쒕옒洹??꾩쟻/lock 由ъ뀑 (???쒕옒洹??몄뀡 ?쒖옉)
         self._gap_accum_x   = 0
         self._gap_accum_y   = 0
         self._gap_locked_ax = None
-        # Panning 모드 + 좌클릭 → 닫힌 손 커서
+        # Panning 紐⑤뱶 + 醫뚰겢由????ロ엺 ??而ㅼ꽌
         if (event.button() == Qt.MouseButton.LeftButton
                 and getattr(self.window(), '_pan_mode', False)):
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
         self.clicked.emit(self)
 
     def mouseReleaseEvent(self, event):
-        # cross-link 모드: 좌클릭이고 드래그하지 않은 경우 → crosshair 설정
+        if self._annotation_release(event.pos()):
+            if QWidget.mouseGrabber() is self:
+                self.releaseMouse()
+            event.accept()
+            return
+
+        # cross-link 紐⑤뱶: 醫뚰겢由?씠怨??쒕옒洹명븯吏 ?딆? 寃쎌슦 ??crosshair ?ㅼ젙
         if (self.cross_link
                 and event.button() == Qt.MouseButton.LeftButton
                 and not self._drag_moved
                 and self.series):
             self._emit_cross_click(event.pos())
-        # Shift+클릭(드래그 없음) → 그룹 sync 토글 (Shift+드래그는 이미지 이동)
+        # Shift+?대┃(?쒕옒洹??놁쓬) ??洹몃９ sync ?좉? (Shift+?쒕옒洹몃뒗 ?대?吏 ?대룞)
         if (event.button() == Qt.MouseButton.LeftButton
                 and not self._drag_moved
                 and event.modifiers() & Qt.KeyboardModifier.ShiftModifier
                 and self.sync_manager is not None):
             self.sync_manager.ctrl_toggle(self)
-        # Panning 모드면 다시 열린 손으로
+        # Panning 紐⑤뱶硫??ㅼ떆 ?대┛ ?먯쑝濡?
         if (event.button() == Qt.MouseButton.LeftButton
                 and getattr(self.window(), '_pan_mode', False)):
             self.setCursor(Qt.CursorShape.OpenHandCursor)
         self._last_pos   = None
         self._drag_accum = 0
-        # mousePress에서 grabMouse를 했을 수 있음 — 안전하게 해제
+        # mousePress?먯꽌 grabMouse瑜??덉쓣 ???덉쓬 ???덉쟾?섍쾶 ?댁젣
         if QApplication.mouseButtons() == Qt.MouseButton.NoButton:
             try:
                 self.releaseMouse()
@@ -1545,10 +2175,10 @@ class DicomPanel(QWidget):
                 pass
 
     def mouseDoubleClickEvent(self, event):
-        """패널 더블클릭 → Space 토글과 동일 (1×1 ↔ multi-panel)."""
+        """?⑤꼸 ?붾툝?대┃ ??Space ?좉?怨??숈씪 (1횞1 ??multi-panel)."""
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        # z-order 위 패널로 위임 (활성 패널을 그 패널로 만듦)
+        # z-order ???⑤꼸濡??꾩엫 (?쒖꽦 ?⑤꼸??洹??⑤꼸濡?留뚮벀)
         vg = self.parentWidget()
         if vg is not None and hasattr(vg, '_panel_at_global'):
             gx = self.x() + event.pos().x()
@@ -1561,7 +2191,7 @@ class DicomPanel(QWidget):
             win._toggle_panel_zoom()
 
     def _emit_cross_click(self, pos):
-        """클릭 위치를 3D 월드 좌표로 변환해 cross_clicked 시그널 발신."""
+        """?대┃ ?꾩튂瑜?3D ?붾뱶 醫뚰몴濡?蹂?섑빐 cross_clicked ?쒓렇??諛쒖떊."""
         ds = self._get_ds()
         if ds is None or not _has_position_tags(ds):
             return
@@ -1576,15 +2206,15 @@ class DicomPanel(QWidget):
         self.cross_clicked.emit(self, world)
 
     def _screen_to_image(self, sx, sy):
-        """화면 픽셀(sx,sy) → 이미지 픽셀(row_f, col_f). 범위 밖이면 None,None.
-        zoom + paint_offset(갭) + pan_offset 모두 반영."""
+        """?붾㈃ ?쎌?(sx,sy) ???대?吏 ?쎌?(row_f, col_f). 踰붿쐞 諛뽰씠硫?None,None.
+        zoom + paint_offset(媛? + pan_offset 紐⑤몢 諛섏쁺."""
         if self._raw_pix is None or self._disp_pix is None:
             return None, None
         iw = self._raw_pix.width()
         ih = self._raw_pix.height()
         dw = self._disp_pix.width()
         dh = self._disp_pix.height()
-        # _disp_pix가 그려지는 widget 내 좌상단 — paintEvent와 동일 식
+        # _disp_pix媛 洹몃젮吏??widget ??醫뚯긽????paintEvent? ?숈씪 ??
         ox = (self.width()  - dw) // 2 + self._paint_offset_x + self._pan_offset_x
         oy = (self.height() - dh) // 2 + self._paint_offset_y + self._pan_offset_y
         lx = sx - ox
@@ -1594,9 +2224,9 @@ class DicomPanel(QWidget):
         return ly * ih / dh, lx * iw / dw   # row_f, col_f
 
     def set_crosshair_from_world(self, world):
-        """외부에서 world 좌표를 받아 교차선 설정 + 가장 가까운 슬라이스로 이동.
-        Cross-link는 슬라이스 위치만 동기화 — W/L은 절대 변경하지 않는다.
-        DWI 시리즈는 현재 b-value를 유지한 채 해부학적 위치만 이동."""
+        """?몃??먯꽌 world 醫뚰몴瑜?諛쏆븘 援먯감???ㅼ젙 + 媛??媛源뚯슫 ?щ씪?댁뒪濡??대룞.
+        Cross-link???щ씪?댁뒪 ?꾩튂留??숆린????W/L? ?덈? 蹂寃쏀븯吏 ?딅뒗??
+        DWI ?쒕━利덈뒗 ?꾩옱 b-value瑜??좎???梨??대??숈쟻 ?꾩튂留??대룞."""
         if not self.series:
             return
         _wl, _ww = self.wl, self.ww          # guard: cross-link must never change W/L
@@ -1614,7 +2244,7 @@ class DicomPanel(QWidget):
         if self._raw_pix:
             self._make_display()
 
-    # ── DWI b-value support ──────────────────────────────────
+    # ?? DWI b-value support ??????????????????????????????????
 
     def _build_dwi_info(self):
         """Scan series headers for multi-b-value DWI and build position/b-value tables."""
@@ -1628,7 +2258,7 @@ class DicomPanel(QWidget):
         if len(unique_bvals) < 2:
             return  # not multi-b-value DWI
 
-        # Map rounded position → sequential position index
+        # Map rounded position ??sequential position index
         pos_keys  : list  = []
         pos_to_pi : dict  = {}
         for pos in slice_pos:
@@ -1639,7 +2269,7 @@ class DicomPanel(QWidget):
                 pos_to_pi[rp] = len(pos_keys)
                 pos_keys.append(rp)
 
-        # (pos_index, bval) → first slice index at that combination
+        # (pos_index, bval) ??first slice index at that combination
         table     : dict  = {}
         slice_pidx: list  = []
         for i, (pos, bval) in enumerate(zip(slice_pos, slice_bvals)):
@@ -1668,7 +2298,7 @@ class DicomPanel(QWidget):
         series normal.  Called at series load time.
 
         Algorithm (user spec):
-          normal = cross(IOP_row, IOP_col) — normalised
+          normal = cross(IOP_row, IOP_col) ??normalised
           per slice: center = IPP + (cols-1)/2*ps[1]*row_dir + (rows-1)/2*ps[0]*col_dir
           sync lookup: argmin |dot(broadcast_center, recv_normal) - recv_proj_i|
         """
@@ -1800,7 +2430,7 @@ class DicomPanel(QWidget):
         self._render()
         self.wl, self.ww = _wl, _ww
 
-    # ── slice navigation (respects active b-value filter pool) ──
+    # ?? slice navigation (respects active b-value filter pool) ??
 
     def _navigate_slice(self, step):
         """Move self.idx by step within the active filter pool (or the full series)."""
@@ -1821,7 +2451,7 @@ class DicomPanel(QWidget):
                     if self.sync_manager:
                         self.sync_manager.broadcast_scroll(self, delta=step)
                 return
-        # no filter — navigate within full series
+        # no filter ??navigate within full series
         new_idx = max(0, min(len(self.series) - 1, self.idx + step))
         if new_idx != self.idx:
             self.idx = new_idx
@@ -1842,10 +2472,10 @@ class DicomPanel(QWidget):
                 return vi, len(pool)
         return self.idx, len(self.series)
 
-    # ── 그룹 동기화 ──────────────────────────────────────────
+    # ?? 洹몃９ ?숆린????????????????????????????????????????????
 
     def setup_sync(self, manager):
-        """Attach panel to a GroupSyncManager and create the ∞ badge overlay."""
+        """Attach panel to a GroupSyncManager and create the ??badge overlay."""
         self.sync_manager = manager
         manager.register(self)
         badge = SyncBadge(parent=self)
@@ -1854,7 +2484,7 @@ class DicomPanel(QWidget):
         self._sync_badge = badge
 
     def _update_sync_badge(self):
-        """Reposition ∞ badge in bottom-right of letterbox; hide when tags are off."""
+        """Reposition ??badge in bottom-right of letterbox; hide when tags are off."""
         badge = self._sync_badge
         if badge is None:
             return
@@ -1929,26 +2559,30 @@ class DicomPanel(QWidget):
         self.update()
 
     def mouseMoveEvent(self, event):
+        if self._annotation_move(event.pos()):
+            event.accept()
+            return
+
         if self._last_pos is None or not self.series:
             return
         dy = event.pos().y() - self._last_pos.y()
         dx = event.pos().x() - self._last_pos.x()
 
-        # 3px 이상 움직이면 드래그로 판정
+        # 3px ?댁긽 ?吏곸씠硫??쒕옒洹몃줈 ?먯젙
         if abs(dx) > 3 or abs(dy) > 3:
             self._drag_moved = True
 
         if event.buttons() & Qt.MouseButton.LeftButton:
-            # Shift+좌클릭 드래그 → 모든 패널 widget을 가운데/바깥 방향으로 이동
-            # (PPT 캡처용 갭 조절, 오버랩 허용)
-            #  • 1/2 속도: 마우스 2px 당 offset 1px
-            #  • axis lock: 드래그 세션 시작 시 dominant 축으로 잠가서 한 방향만 작동
-            #  • 방향: 마우스 → 안쪽으로 끌면 패널이 안쪽으로 모임
+            # Shift+醫뚰겢由??쒕옒洹???紐⑤뱺 ?⑤꼸 widget??媛?대뜲/諛붽묑 諛⑺뼢?쇰줈 ?대룞
+            # (PPT 罹≪쿂??媛?議곗젅, ?ㅻ쾭???덉슜)
+            #  ??1/2 ?띾룄: 留덉슦??2px ??offset 1px
+            #  ??axis lock: ?쒕옒洹??몄뀡 ?쒖옉 ??dominant 異뺤쑝濡??좉?????諛⑺뼢留??묐룞
+            #  ??諛⑺뼢: 留덉슦?????덉そ?쇰줈 ?뚮㈃ ?⑤꼸???덉そ?쇰줈 紐⑥엫
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 self._gap_accum_x += dx
                 self._gap_accum_y += dy
 
-                # 첫 lock 결정 (4px 이상 누적된 dominant 축)
+                # 泥?lock 寃곗젙 (4px ?댁긽 ?꾩쟻??dominant 異?
                 if self._gap_locked_ax is None:
                     if (abs(self._gap_accum_x) >= 4
                             and abs(self._gap_accum_x) >= abs(self._gap_accum_y)):
@@ -1957,7 +2591,7 @@ class DicomPanel(QWidget):
                         self._gap_locked_ax = 'y'
 
                 win = self.window()
-                # lock된 축에서 2px 누적될 때마다 1px 적용 (1/2 속도) — 부호 반전
+                # lock??異뺤뿉??2px ?꾩쟻???뚮쭏??1px ?곸슜 (1/2 ?띾룄) ??遺??諛섏쟾
                 if self._gap_locked_ax == 'x':
                     step = self._gap_accum_x // 2
                     if step != 0:
@@ -1974,14 +2608,14 @@ class DicomPanel(QWidget):
                 self._last_pos = event.pos()
                 return
 
-            # Panning 모드 (P 단축키 또는 툴바로 활성) → 영상 위치 이동
+            # Panning 紐⑤뱶 (P ?⑥텞???먮뒗 ?대컮濡??쒖꽦) ???곸긽 ?꾩튂 ?대룞
             win = self.window()
             if getattr(win, '_pan_mode', False):
                 old_pan_x, old_pan_y = self._pan_offset_x, self._pan_offset_y
                 new_x = old_pan_x + dx
                 new_y = old_pan_y + dy
 
-                # 자석 효과: 인접 패널의 이미지 가장자리에 8px 이내로 가까워지면 정확히 맞춤
+                # ?먯꽍 ?④낵: ?몄젒 ?⑤꼸???대?吏 媛?μ옄由ъ뿉 8px ?대궡濡?媛源뚯썙吏硫??뺥솗??留욎땄
                 vg = self.parentWidget()
                 if vg is not None and hasattr(vg, '_snap_to_neighbors'):
                     new_x, new_y = vg._snap_to_neighbors(self, new_x, new_y, threshold=3)
@@ -1997,16 +2631,16 @@ class DicomPanel(QWidget):
                         self.sync_manager.broadcast_pan_delta(self, adx, ady)
                 return
 
-            # 좌클릭 드래그 상하 → 슬라이스 이동 (10px 누적마다 1장)
+            # 醫뚰겢由??쒕옒洹??곹븯 ???щ씪?댁뒪 ?대룞 (10px ?꾩쟻留덈떎 1??
             self._drag_accum += dy
-            step = int(self._drag_accum / 10)   # 10px = 슬라이스 1장
+            step = int(self._drag_accum / 10)   # 10px = ?щ씪?댁뒪 1??
             if step != 0:
                 self._drag_accum -= step * 10
                 self._navigate_slice(step)
             self._last_pos = event.pos()
 
         elif event.buttons() & Qt.MouseButton.RightButton:
-            # 우클릭 드래그: 좌우 → WW, 상하 → WL
+            # ?고겢由??쒕옒洹? 醫뚯슦 ??WW, ?곹븯 ??WL
             self.ww  = max(1.0, self.ww + dx * 3)
             self.wl += dy * 2
             self._last_pos = event.pos()
@@ -2015,13 +2649,13 @@ class DicomPanel(QWidget):
                 self.sync_manager.broadcast_wl(self, self.wl, self.ww)
 
         elif event.buttons() & Qt.MouseButton.MiddleButton:
-            # 가운데 드래그: 상하 → 확대/축소 (위로 = zoom in)
-            # 5px 당 한 단계, Ctrl+휠과 동일한 1.15 배율
+            # 媛?대뜲 ?쒕옒洹? ?곹븯 ???뺣?/異뺤냼 (?꾨줈 = zoom in)
+            # 5px ?????④퀎, Ctrl+?좉낵 ?숈씪??1.15 諛곗쑉
             self._drag_accum += dy
             step = int(self._drag_accum / 5)
             if step != 0:
                 self._drag_accum -= step * 5
-                # 위로 끌면 dy<0 → 확대
+                # ?꾨줈 ?뚮㈃ dy<0 ???뺣?
                 factor = (1 / 1.15) ** step
                 self.zoom = max(0.05, min(30.0, self.zoom * factor))
                 self._make_display()
@@ -2030,7 +2664,7 @@ class DicomPanel(QWidget):
             self._last_pos = event.pos()
 
     def wheelEvent(self, event):
-        # 갭 줄임/오버랩 상태에서 z-order 위 패널이 진짜 사용자가 보는 것 → 그쪽으로 위임
+        # 媛?以꾩엫/?ㅻ쾭???곹깭?먯꽌 z-order ???⑤꼸??吏꾩쭨 ?ъ슜?먭? 蹂대뒗 寃???洹몄そ?쇰줈 ?꾩엫
         vg = self.parentWidget()
         if vg is not None and hasattr(vg, '_panel_at_global'):
             pos = event.position()
@@ -2038,7 +2672,7 @@ class DicomPanel(QWidget):
             gy = self.y() + pos.y()
             real = vg._panel_at_global(int(gx), int(gy))
             if real is not None and real is not self:
-                # QWheelEvent 재생성 대신 직접 처리 — 호환성/안정성 우선
+                # QWheelEvent ?ъ깮?????吏곸젒 泥섎━ ???명솚???덉젙???곗꽑
                 real._handle_wheel(event.angleDelta().y(), event.modifiers())
                 event.accept()
                 return
@@ -2046,19 +2680,19 @@ class DicomPanel(QWidget):
         event.accept()
 
     def _handle_wheel(self, delta, modifiers):
-        """wheelEvent 본체 — 다른 패널에서 위임 호출도 가능하도록 분리."""
+        """wheelEvent 蹂몄껜 ???ㅻⅨ ?⑤꼸?먯꽌 ?꾩엫 ?몄텧??媛?ν븯?꾨줉 遺꾨━."""
         if modifiers & Qt.KeyboardModifier.ControlModifier:
-            # Ctrl+스크롤 → 확대/축소
+            # Ctrl+?ㅽ겕濡????뺣?/異뺤냼
             factor = 1.15 if delta > 0 else 1 / 1.15
             self.zoom = max(0.05, min(30.0, self.zoom * factor))
             self._make_display()
             if self.sync_manager:
                 self.sync_manager.broadcast_zoom(self, self.zoom)
         else:
-            # 스크롤 → 슬라이스 이동
+            # ?ㅽ겕濡????щ씪?댁뒪 ?대룞
             if not self.series:
                 return
-            step = -1 if delta > 0 else 1   # 위로 스크롤 = 이전 슬라이스
+            step = -1 if delta > 0 else 1   # ?꾨줈 ?ㅽ겕濡?= ?댁쟾 ?щ씪?댁뒪
             self._navigate_slice(step)
 
     def keyPressEvent(self, event):
@@ -2075,10 +2709,18 @@ class DicomPanel(QWidget):
             self.window()._toggle_panel_zoom()
         elif key == Qt.Key.Key_X:
             self.window()._toggle_cross_link()
+        elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if not self.delete_last_annotation():
+                super().keyPressEvent(event)
+        elif key == Qt.Key.Key_Escape:
+            if hasattr(self.window(), '_set_annotation_tool'):
+                self.window()._set_annotation_tool('none')
+            else:
+                super().keyPressEvent(event)
         else:
             super().keyPressEvent(event)
 
-    # ── 드래그&드롭 ──────────────────────────────────────────
+    # ?? ?쒕옒洹??쒕∼ ??????????????????????????????????????????
     def dragEnterEvent(self, event):
         event.accept() if event.mimeData().hasUrls() else event.ignore()
 
@@ -2090,9 +2732,9 @@ class DicomPanel(QWidget):
             win._load_path(urls[0].toLocalFile())
 
 
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
 #  DWI b-value badge overlay
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
 class BValueOverlay(QWidget):
     """Semi-transparent pill-badge strip that floats inside a DicomPanel.
     Shows one badge per unique b-value; clicking a badge emits b_value_clicked(int)."""
@@ -2118,8 +2760,8 @@ class BValueOverlay(QWidget):
                                self._MARGIN, self._MARGIN)
         lay.setSpacing(self._SPACING)
 
-        # [b▾] toggle button
-        self._toggle = QPushButton("b▾", self)
+        # [b?? toggle button
+        self._toggle = QPushButton("b", self)
         self._toggle.setFixedSize(self._TOGGLE_W, self._BADGE_H)
         self._toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self._toggle.clicked.connect(self._on_toggle)
@@ -2141,7 +2783,7 @@ class BValueOverlay(QWidget):
         self._refresh_style()
         self.adjustSize()
 
-    # ── public API ───────────────────────────────────────────
+    # ?? public API ???????????????????????????????????????????
 
     def set_active_bval(self, bval):
         if bval == self._active:
@@ -2149,13 +2791,13 @@ class BValueOverlay(QWidget):
         self._active = bval
         self._refresh_style()
 
-    # ── internals ────────────────────────────────────────────
+    # ?? internals ????????????????????????????????????????????
 
     def _on_toggle(self):
         self._collapsed = not self._collapsed
         for btn in self._btns.values():
             btn.setVisible(not self._collapsed)
-        self._toggle.setText("b▸" if self._collapsed else "b▾")
+        self._toggle.setText("+" if self._collapsed else "-")
         self.adjustSize()
         p = self.parent()
         if p and hasattr(p, '_update_bvalue_overlay'):
@@ -2184,11 +2826,11 @@ class BValueOverlay(QWidget):
         p.end()
 
 
-# ─────────────────────────────────────────────────────────────
-#  동기화 배지 (∞, bottom-right of viewport)
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  ?숆린??諛곗? (?? bottom-right of viewport)
+# ?????????????????????????????????????????????????????????????
 class SyncBadge(QWidget):
-    """Circular ∞ badge in the bottom-right corner of a DicomPanel viewport.
+    """Circular ??badge in the bottom-right corner of a DicomPanel viewport.
     Clicking toggles global group sync ON/OFF via GroupSyncManager (all panels at once).
     Uses QPainter for text rendering to avoid QPushButton font/encoding issues."""
 
@@ -2234,9 +2876,9 @@ class SyncBadge(QWidget):
         painter.end()
 
 
-# ─────────────────────────────────────────────────────────────
-#  뷰어 그리드
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  酉곗뼱 洹몃━??
+# ?????????????????????????????????????????????????????????????
 class ViewerGrid(QWidget):
     LAYOUTS = {
         '1x1': (1, 1), '1x2': (1, 2), '1x3': (1, 3),
@@ -2249,19 +2891,19 @@ class ViewerGrid(QWidget):
         self.panels       = []
         self.active_panel = None
         self._mode        = None
-        # Space 토글: 직전 multi-panel 상태를 저장
+        # Space ?좉?: 吏곸쟾 multi-panel ?곹깭瑜????
         self._saved_multi      = []      # [(series, idx, wl, ww, zoom), ...]
-        self._saved_multi_mode = '2x2'   # 직전 multi 모드
-        self._saved_multi_active = 0     # 직전 활성 패널 인덱스
+        self._saved_multi_mode = '2x2'   # 吏곸쟾 multi 紐⑤뱶
+        self._saved_multi_active = 0     # 吏곸쟾 ?쒖꽦 ?⑤꼸 ?몃뜳??
         self.sync_manager = None         # set by DicomViewer after construction
 
-        # 패널 widget 자체의 이동 offset (PPT 캡처용 갭 조절)
-        # 양수 = 가운데로부터 멀어짐 (갭 증가)
-        # 음수 = 가운데로 모임 (오버랩 허용)
+        # ?⑤꼸 widget ?먯껜???대룞 offset (PPT 罹≪쿂??媛?議곗젅)
+        # ?묒닔 = 媛?대뜲濡쒕???硫?댁쭚 (媛?利앷?)
+        # ?뚯닔 = 媛?대뜲濡?紐⑥엫 (?ㅻ쾭???덉슜)
         self._image_offset_x = 0
         self._image_offset_y = 0
 
-        # background 검정 — panels는 transparent라 letterbox 영역에 이게 비침
+        # background 寃????panels??transparent??letterbox ?곸뿭???닿쾶 鍮꾩묠
         self.setStyleSheet("background:#000;")
         self.set_layout('1x1')
 
@@ -2274,7 +2916,9 @@ class ViewerGrid(QWidget):
         n_panels   = rows * cols
 
         old_series   = [p.series[:] for p in self.panels]
+        old_annotations = [getattr(p, '_annotations', [])[:] for p in self.panels]
         old_tags     = self.panels[0].show_tags if self.panels else True
+        old_ann_vis  = self.panels[0].show_annotations if self.panels else True
         old_crosslnk = self.panels[0].cross_link if self.panels else False
         for p in self.panels:
             if self.sync_manager is not None:
@@ -2286,7 +2930,7 @@ class ViewerGrid(QWidget):
 
         positions = [(r, c) for r in range(rows) for c in range(cols)]
 
-        # 단일 시리즈만 있을 때 → multi-panel로 균등 분배
+        # ?⑥씪 ?쒕━利덈쭔 ?덉쓣 ????multi-panel濡?洹좊벑 遺꾨같
         unique = [s for s in old_series if s]
         all_same = len(unique) >= 1 and all(s is unique[0] for s in unique)
         single_series = unique[0] if unique else None
@@ -2294,6 +2938,7 @@ class ViewerGrid(QWidget):
         for i, (r, c) in enumerate(positions):
             p = DicomPanel(panel_id=i, parent=self)
             p.show_tags  = old_tags
+            p.show_annotations = old_ann_vis
             p.cross_link = old_crosslnk
             p.clicked.connect(self._on_clicked)
             if old_crosslnk:
@@ -2303,12 +2948,14 @@ class ViewerGrid(QWidget):
                 p.setup_sync(self.sync_manager)
 
             if n_panels > 1 and all_same and single_series:
-                # 같은 시리즈를 N개 패널에 균등 분배
+                # 媛숈? ?쒕━利덈? N媛??⑤꼸??洹좊벑 遺꾨같
                 total = len(single_series)
                 idx   = int(total * (i + 1) / (n_panels + 1))
                 p.load_series(single_series, start_idx=idx)
             elif i < len(old_series) and old_series[i]:
                 p.load_series(old_series[i])
+                if i < len(old_annotations):
+                    p._annotations = old_annotations[i][:]
 
             p.show()
             self.panels.append(p)
@@ -2321,12 +2968,12 @@ class ViewerGrid(QWidget):
         self._relayout_panels()
 
     def _relayout_panels(self):
-        """현재 mode + image_offset에 따라 panels의 setGeometry 직접 계산.
-        오버랩 동작 2단계:
-          Phase A — 먼저 widget 안에서 이미지(_disp_pix) 위치를 안쪽으로 옮겨
-                    letterbox(검정 가장자리) 영역을 줄임. 이 단계에서는 widget 위치 고정.
-          Phase B — letterbox가 다 사라지고도 더 끌면 widget 자체를 이동 → 실제 오버랩.
-        바깥쪽 이동(offset > 0)은 Phase A 없이 곧장 widget 이동 (갭 증가).
+        """?꾩옱 mode + image_offset???곕씪 panels??setGeometry 吏곸젒 怨꾩궛.
+        ?ㅻ쾭???숈옉 2?④퀎:
+          Phase A ??癒쇱? widget ?덉뿉???대?吏(_disp_pix) ?꾩튂瑜??덉そ?쇰줈 ??꺼
+                    letterbox(寃??媛?μ옄由? ?곸뿭??以꾩엫. ???④퀎?먯꽌??widget ?꾩튂 怨좎젙.
+          Phase B ??letterbox媛 ???щ씪吏怨좊룄 ???뚮㈃ widget ?먯껜瑜??대룞 ???ㅼ젣 ?ㅻ쾭??
+        諛붽묑履??대룞(offset > 0)? Phase A ?놁씠 怨㏃옣 widget ?대룞 (媛?利앷?).
         """
         if not self._mode or not self.panels:
             return
@@ -2338,36 +2985,36 @@ class ViewerGrid(QWidget):
         cell_h = H // rows
         cr = (rows - 1) / 2.0
         cc = (cols - 1) / 2.0
-        ox = self._image_offset_x   # 양수=바깥, 음수=안쪽
+        ox = self._image_offset_x   # ?묒닔=諛붽묑, ?뚯닔=?덉そ
         oy = self._image_offset_y
 
         for i, p in enumerate(self.panels):
             r = i // cols
             c = i %  cols
-            # 가운데로부터 방향 부호 (-1, 0, +1)
+            # 媛?대뜲濡쒕???諛⑺뼢 遺??(-1, 0, +1)
             sx = 0 if abs(c - cc) < 1e-6 else (1 if c > cc else -1)
             sy = 0 if abs(r - cr) < 1e-6 else (1 if r > cr else -1)
 
-            # 각 패널의 letterbox 한계 (이미지 주변 검정 폭)
+            # 媛??⑤꼸??letterbox ?쒓퀎 (?대?吏 二쇰? 寃????
             if p._disp_pix is not None:
                 lb_x = max(0, (cell_w - p._disp_pix.width())  // 2)
                 lb_y = max(0, (cell_h - p._disp_pix.height()) // 2)
             else:
                 lb_x = lb_y = 0
 
-            # X축
+            # X異?
             if sx == 0:
                 paint_x = 0; widget_x = 0
             elif ox < 0:
-                # 안쪽 이동: letterbox만큼은 paint, 초과분만 widget
-                paint_x  = max(ox, -lb_x)         # 음수, |paint_x| ≤ lb_x
-                widget_x = ox - paint_x            # 남은 안쪽 이동량 (≤0)
+                # ?덉そ ?대룞: letterbox留뚰겮? paint, 珥덇낵遺꾨쭔 widget
+                paint_x  = max(ox, -lb_x)         # ?뚯닔, |paint_x| ??lb_x
+                widget_x = ox - paint_x            # ?⑥? ?덉そ ?대룞??(??)
             else:
-                # 바깥 이동: paint 안 쓰고 widget만
+                # 諛붽묑 ?대룞: paint ???곌퀬 widget留?
                 paint_x = 0
                 widget_x = ox
 
-            # Y축
+            # Y異?
             if sy == 0:
                 paint_y = 0; widget_y = 0
             elif oy < 0:
@@ -2377,24 +3024,24 @@ class ViewerGrid(QWidget):
                 paint_y = 0
                 widget_y = oy
 
-            # 적용
-            # paint_offset_for_panel: sx=-1 좌측 패널이고 paint_x=-5(안쪽)면
-            #   이미지를 +5 (오른쪽=안쪽) 방향으로 그림 → sx * paint_x = -1 * -5 = +5 ✓
+            # ?곸슜
+            # paint_offset_for_panel: sx=-1 醫뚯륫 ?⑤꼸?닿퀬 paint_x=-5(?덉そ)硫?
+            #   ?대?吏瑜?+5 (?ㅻⅨ履??덉そ) 諛⑺뼢?쇰줈 洹몃┝ ??sx * paint_x = -1 * -5 = +5 ??
             p._paint_offset_x = sx * paint_x
             p._paint_offset_y = sy * paint_y
 
-            # widget 위치
+            # widget ?꾩튂
             x = c * cell_w + sx * widget_x
             y = r * cell_h + sy * widget_y
             p.setGeometry(int(x), int(y), int(cell_w), int(cell_h))
             p.update()
 
-    # ── 이미지 이동 (PPT 캡처용 갭 조절) ─────────────────────
+    # ?? ?대?吏 ?대룞 (PPT 罹≪쿂??媛?議곗젅) ?????????????????????
     def image_offset(self):
         return (self._image_offset_x, self._image_offset_y)
 
     def set_image_offset(self, ox, oy):
-        """절대값 설정. 변경된 (ox, oy) 반환."""
+        """?덈?媛??ㅼ젙. 蹂寃쎈맂 (ox, oy) 諛섑솚."""
         self._image_offset_x = int(ox)
         self._image_offset_y = int(oy)
         self._relayout_panels()
@@ -2413,25 +3060,25 @@ class ViewerGrid(QWidget):
         return (0, 0)
 
     def _panel_letterbox_global_rect(self, panel):
-        """패널의 letterbox(이미지가 실제 보이는 영역) 글로벌 좌표.
-        zoom과 무관 — 사용자가 화면에서 이미지 영역으로 인식하는 사각형.
-        hit-test (어떤 패널을 클릭했는가) 용."""
+        """?⑤꼸??letterbox(?대?吏媛 ?ㅼ젣 蹂댁씠???곸뿭) 湲濡쒕쾶 醫뚰몴.
+        zoom怨?臾닿? ???ъ슜?먭? ?붾㈃?먯꽌 ?대?吏 ?곸뿭?쇰줈 ?몄떇?섎뒗 ?ш컖??
+        hit-test (?대뼡 ?⑤꼸???대┃?덈뒗媛) ??"""
         if not panel._disp_pix:
             return None
         zoom = max(0.001, float(panel.zoom))
         base_w = int(round(panel._disp_pix.width()  / zoom))
         base_h = int(round(panel._disp_pix.height() / zoom))
-        # paintEvent와 동일한 letterbox 좌상단 식 (pan_offset은 미적용)
+        # paintEvent? ?숈씪??letterbox 醫뚯긽????(pan_offset? 誘몄쟻??
         local_x = (panel.width()  - base_w) // 2 + panel._paint_offset_x
         local_y = (panel.height() - base_h) // 2 + panel._paint_offset_y
         return (panel.x() + local_x, panel.y() + local_y, base_w, base_h)
 
     def _panel_at_global(self, gx, gy):
-        """ViewerGrid 좌표 (gx, gy)에서 클릭/마우스 위치에 해당하는 패널 반환.
+        """ViewerGrid 醫뚰몴 (gx, gy)?먯꽌 ?대┃/留덉슦???꾩튂???대떦?섎뒗 ?⑤꼸 諛섑솚.
 
-        Qt의 실제 widget z-order(self.children() 마지막 = 맨 위)를 기준으로
-        letterbox hit-test를 수행한다.  panels 리스트 순서 대신 children() 순서를
-        사용하므로, _relayout_panels에서 raise_()로 보정된 z-order가 그대로 반영된다.
+        Qt???ㅼ젣 widget z-order(self.children() 留덉?留?= 留???瑜?湲곗??쇰줈
+        letterbox hit-test瑜??섑뻾?쒕떎.  panels 由ъ뒪???쒖꽌 ???children() ?쒖꽌瑜?
+        ?ъ슜?섎?濡? _relayout_panels?먯꽌 raise_()濡?蹂댁젙??z-order媛 洹몃?濡?諛섏쁺?쒕떎.
         """
         panel_set = set(self.panels)
         for child in reversed(self.children()):
@@ -2446,28 +3093,28 @@ class ViewerGrid(QWidget):
         return None
 
     def _panel_image_global_rect(self, panel, pan_x=None, pan_y=None):
-        """패널의 _disp_pix가 차지하는 글로벌(ViewerGrid) 좌표 사각형.
-        pan_x, pan_y가 주어지면 그 값으로, 아니면 panel._pan_offset_*로."""
+        """?⑤꼸??_disp_pix媛 李⑥??섎뒗 湲濡쒕쾶(ViewerGrid) 醫뚰몴 ?ш컖??
+        pan_x, pan_y媛 二쇱뼱吏硫?洹?媛믪쑝濡? ?꾨땲硫?panel._pan_offset_*濡?"""
         if not panel._disp_pix:
             return None
         if pan_x is None:
             pan_x = panel._pan_offset_x
         if pan_y is None:
             pan_y = panel._pan_offset_y
-        # 패널 widget 안에서 _disp_pix 그려지는 좌상단 (paint_offset + pan_offset)
+        # ?⑤꼸 widget ?덉뿉??_disp_pix 洹몃젮吏??醫뚯긽??(paint_offset + pan_offset)
         local_x = ((panel.width()  - panel._disp_pix.width())  // 2
                    + panel._paint_offset_x + pan_x)
         local_y = ((panel.height() - panel._disp_pix.height()) // 2
                    + panel._paint_offset_y + pan_y)
-        # 글로벌 좌표 = 패널 widget의 위치 + 로컬
+        # 湲濡쒕쾶 醫뚰몴 = ?⑤꼸 widget???꾩튂 + 濡쒖뺄
         gx = panel.x() + local_x
         gy = panel.y() + local_y
         return (gx, gy, panel._disp_pix.width(), panel._disp_pix.height())
 
     def _snap_to_neighbors(self, active_panel, new_pan_x, new_pan_y, threshold=8):
-        """active_panel이 (new_pan_x, new_pan_y)로 panning할 때
-        인접 패널 이미지의 4개 가장자리(L/R/T/B)에 threshold 이내로 가까워지면 정확히 일치시킴.
-        반환: 보정된 (pan_x, pan_y)."""
+        """active_panel??(new_pan_x, new_pan_y)濡?panning????
+        ?몄젒 ?⑤꼸 ?대?吏??4媛?媛?μ옄由?L/R/T/B)??threshold ?대궡濡?媛源뚯썙吏硫??뺥솗???쇱튂?쒗궡.
+        諛섑솚: 蹂댁젙??(pan_x, pan_y)."""
         rect_a = self._panel_image_global_rect(active_panel, new_pan_x, new_pan_y)
         if rect_a is None:
             return (new_pan_x, new_pan_y)
@@ -2475,7 +3122,7 @@ class ViewerGrid(QWidget):
         a_left, a_right  = ax,         ax + aw
         a_top,  a_bot    = ay,         ay + ah
 
-        # 후보 가장자리 모음
+        # ?꾨낫 媛?μ옄由?紐⑥쓬
         best_dx = None; best_x_dist = threshold + 1
         best_dy = None; best_y_dist = threshold + 1
 
@@ -2489,15 +3136,15 @@ class ViewerGrid(QWidget):
             b_left, b_right = bx, bx + bw
             b_top,  b_bot   = by, by + bh
 
-            # X 가장자리 매칭: active 좌↔이웃 좌, 좌↔우, 우↔좌, 우↔우
+            # X 媛?μ옄由?留ㅼ묶: active 醫뚢넄?댁썐 醫? 醫뚢넄?? ?겸넄醫? ?겸넄??
             for ae, be in ((a_left, b_left), (a_left, b_right),
                            (a_right, b_left), (a_right, b_right)):
-                d = be - ae   # 이웃 가장자리에 맞추려면 active를 d만큼 이동
+                d = be - ae   # ?댁썐 媛?μ옄由ъ뿉 留욎텛?ㅻ㈃ active瑜?d留뚰겮 ?대룞
                 if abs(d) <= threshold and abs(d) < best_x_dist:
                     best_x_dist = abs(d)
                     best_dx = d
 
-            # Y 가장자리 매칭
+            # Y 媛?μ옄由?留ㅼ묶
             for ae, be in ((a_top, b_top), (a_top, b_bot),
                            (a_bot, b_top), (a_bot, b_bot)):
                 d = be - ae
@@ -2526,9 +3173,9 @@ class ViewerGrid(QWidget):
     def load_multi_series(self, series_list):
         """
         series_list: [(label, datasets), ...]
-        현재 layout을 그대로 유지하면서 N개 패널에 채워 넣음.
-        - 1개 시리즈 + multi-panel → 모든 패널에 균등 분배
-        - 여러 시리즈 → 각 패널에 다른 시리즈, 부족한 패널은 비움
+        ?꾩옱 layout??洹몃?濡??좎??섎㈃??N媛??⑤꼸??梨꾩썙 ?ｌ쓬.
+        - 1媛??쒕━利?+ multi-panel ??紐⑤뱺 ?⑤꼸??洹좊벑 遺꾨같
+        - ?щ윭 ?쒕━利???媛??⑤꼸???ㅻⅨ ?쒕━利? 遺議깊븳 ?⑤꼸? 鍮꾩?
         """
         n_panels = len(self.panels)
         n = min(len(series_list), n_panels)
@@ -2536,7 +3183,7 @@ class ViewerGrid(QWidget):
             return
 
         if len(series_list) == 1 and n_panels > 1:
-            # 단일 시리즈를 모든 패널에 균등 분배
+            # ?⑥씪 ?쒕━利덈? 紐⑤뱺 ?⑤꼸??洹좊벑 遺꾨같
             dss   = series_list[0][1]
             total = len(dss)
             for i, p in enumerate(self.panels):
@@ -2545,20 +3192,21 @@ class ViewerGrid(QWidget):
         else:
             for i in range(n):
                 self.panels[i].load_series(series_list[i][1])
-            # 새 페이지가 패널보다 적으면 잔여 패널 비움 (이전 페이지 잔재 제거)
+            # ???섏씠吏媛 ?⑤꼸蹂대떎 ?곸쑝硫??붿뿬 ?⑤꼸 鍮꾩? (?댁쟾 ?섏씠吏 ?붿옱 ?쒓굅)
             for i in range(n, n_panels):
                 self.panels[i].clear()
 
-        # 페이지 전환 후 첫 패널을 활성으로
+        # ?섏씠吏 ?꾪솚 ??泥??⑤꼸???쒖꽦?쇰줈
         if self.panels:
             self._activate(self.panels[0])
 
         self._activate(self.panels[0])
 
     def save_multi_state(self):
-        """현재 multi-panel 상태(layout + 패널별 series, idx, wl, ww, zoom + active) 저장."""
+        """?꾩옱 multi-panel ?곹깭(layout + ?⑤꼸蹂?series, idx, wl, ww, zoom + active) ???"""
         self._saved_multi = [
-            (p.series[:], p.idx, p.wl, p.ww, p.zoom, p.initial_wl, p.initial_ww)
+            (p.series[:], p.idx, p.wl, p.ww, p.zoom, p.initial_wl, p.initial_ww,
+             getattr(p, '_annotations', [])[:], p.show_tags, p.show_annotations)
             for p in self.panels
         ]
         self._saved_multi_mode = self._mode
@@ -2567,12 +3215,12 @@ class ViewerGrid(QWidget):
         )
 
     def restore_multi_state(self):
-        """저장된 multi-panel 상태 복원. 없으면 False 반환."""
+        """??λ맂 multi-panel ?곹깭 蹂듭썝. ?놁쑝硫?False 諛섑솚."""
         if not self._saved_multi:
             return False
         target_mode = getattr(self, '_saved_multi_mode', '2x2')
         if target_mode == self._mode:
-            # 같은 모드면 set_layout 호출이 no-op이므로 강제로 패널 재생성하지 않고 데이터만 복원
+            # 媛숈? 紐⑤뱶硫?set_layout ?몄텧??no-op?대?濡?媛뺤젣濡??⑤꼸 ?ъ깮?깊븯吏 ?딄퀬 ?곗씠?곕쭔 蹂듭썝
             pass
         else:
             self.set_layout(target_mode)
@@ -2583,6 +3231,9 @@ class ViewerGrid(QWidget):
             series, idx, wl, ww, zoom = saved[:5]
             initial_wl = saved[5] if len(saved) > 5 else wl
             initial_ww = saved[6] if len(saved) > 6 else ww
+            annotations = saved[7] if len(saved) > 7 else []
+            show_tags = saved[8] if len(saved) > 8 else True
+            show_annotations = saved[9] if len(saved) > 9 else True
             if series:
                 p.series               = series
                 p.idx                  = idx
@@ -2591,6 +3242,9 @@ class ViewerGrid(QWidget):
                 p.initial_wl           = initial_wl
                 p.initial_ww           = initial_ww
                 p.zoom                 = zoom
+                p._annotations         = annotations[:]
+                p.show_tags            = show_tags
+                p.show_annotations     = show_annotations
                 p._pixel_cache         = {}
                 p._active_bval_filter  = None
                 p._build_dwi_info()
@@ -2601,23 +3255,34 @@ class ViewerGrid(QWidget):
         self._activate(self.panels[active_i])
         return True
 
-    # 하위 호환 alias
+    # ?섏쐞 ?명솚 alias
     def save_2x2_state(self):     return self.save_multi_state()
     def restore_2x2_state(self):  return self.restore_multi_state()
 
     def toggle_tags_all(self):
         if not self.panels:
             return
-        new_state = not self.panels[0].show_tags
+        show_tags, show_annotations = self.overlay_state()
+        if show_tags and show_annotations:
+            new_state = (False, True)
+        elif not show_tags and show_annotations:
+            new_state = (False, False)
+        else:
+            new_state = (True, True)
         for p in self.panels:
-            p.toggle_tags(new_state)
+            p.set_overlay_visibility(*new_state)
 
     def tag_state(self):
         return self.panels[0].show_tags if self.panels else True
 
-    # ── Cross-reference ──────────────────────────────────────
+    def overlay_state(self):
+        if not self.panels:
+            return True, True
+        return self.panels[0].show_tags, self.panels[0].show_annotations
+
+    # ?? Cross-reference ??????????????????????????????????????
     def set_cross_link(self, active):
-        """모든 패널에 cross_link 모드 설정 및 시그널 연결/해제."""
+        """紐⑤뱺 ?⑤꼸??cross_link 紐⑤뱶 ?ㅼ젙 諛??쒓렇???곌껐/?댁젣."""
         for p in self.panels:
             p.cross_link = active
             try:
@@ -2630,19 +3295,19 @@ class ViewerGrid(QWidget):
             for p in self.panels:
                 p.clear_crosshair()
         else:
-            # X 누른 즉시 활성 패널 중앙을 기준으로 cross-line 표시
+            # X ?꾨Ⅸ 利됱떆 ?쒖꽦 ?⑤꼸 以묒븰??湲곗??쇰줈 cross-line ?쒖떆
             self._init_cross_from_active()
 
     def _init_cross_from_active(self):
-        """X 누른 즉시 cross-line 표시.
-        우선순위:
-          1) 마우스 커서가 어느 이미지 위에 있으면 → 해당 패널/픽셀
-          2) 아니면 → 활성 패널 이미지 중앙
+        """X ?꾨Ⅸ 利됱떆 cross-line ?쒖떆.
+        ?곗꽑?쒖쐞:
+          1) 留덉슦??而ㅼ꽌媛 ?대뒓 ?대?吏 ?꾩뿉 ?덉쑝硫????대떦 ?⑤꼸/?쎌?
+          2) ?꾨땲硫????쒖꽦 ?⑤꼸 ?대?吏 以묒븰
         """
         src         = None
         cross_pixel = None    # (row_f, col_f)
 
-        # ── 1) 커서 아래 이미지 찾기 ─────────────────────────
+        # ?? 1) 而ㅼ꽌 ?꾨옒 ?대?吏 李얘린 ?????????????????????????
         global_pos = QCursor.pos()
         for p in self.panels:
             if not p.series:
@@ -2652,12 +3317,12 @@ class ViewerGrid(QWidget):
                 continue
             row_f, col_f = p._screen_to_image(local.x(), local.y())
             if row_f is None:
-                continue                       # 패널 안이지만 이미지 픽셀 밖
+                continue                       # ?⑤꼸 ?덉씠吏留??대?吏 ?쎌? 諛?
             src         = p
             cross_pixel = (row_f, col_f)
             break
 
-        # ── 2) 폴백: 활성 패널 중앙 ───────────────────────────
+        # ?? 2) ?대갚: ?쒖꽦 ?⑤꼸 以묒븰 ???????????????????????????
         if src is None:
             src = self.active_panel
             if src is None or not src.series:
@@ -2673,7 +3338,7 @@ class ViewerGrid(QWidget):
                 return
             cross_pixel = (rows / 2.0, cols / 2.0)
 
-        # ── 공통: world 변환 + 다른 패널 동기화 ──────────────
+        # ?? 怨듯넻: world 蹂??+ ?ㅻⅨ ?⑤꼸 ?숆린????????????????
         ds = src._get_ds()
         if ds is None or not _has_position_tags(ds):
             return
@@ -2689,7 +3354,7 @@ class ViewerGrid(QWidget):
             p.set_crosshair_from_world(world)
 
     def _on_cross_clicked(self, src_panel, world):
-        """src_panel에서 클릭 → 나머지 패널에 교차선+슬라이스 업데이트."""
+        """src_panel?먯꽌 ?대┃ ???섎㉧吏 ?⑤꼸??援먯감???щ씪?댁뒪 ?낅뜲?댄듃."""
         for p in self.panels:
             if p is src_panel:
                 continue
@@ -2702,7 +3367,7 @@ class ViewerGrid(QWidget):
         if not self.active_panel:
             return None
         ap = self.active_panel
-        # 캡처 전 파란 테두리 + cross-hair 제거
+        # 罹≪쿂 ???뚮? ?뚮몢由?+ cross-hair ?쒓굅
         ap._active = False
         ch_backup = ap._crosshair
         if ch_backup is not None:
@@ -2714,7 +3379,7 @@ class ViewerGrid(QWidget):
         try:
             pix = ap.grab()
         finally:
-            # 복원
+            # 蹂듭썝
             ap._active = True
             if ch_backup is not None:
                 ap._crosshair = ch_backup
@@ -2724,7 +3389,7 @@ class ViewerGrid(QWidget):
         return pix
 
     def grab_all(self):
-        # 전체 캡처도 활성 테두리 + 모든 cross-hair 없이
+        # ?꾩껜 罹≪쿂???쒖꽦 ?뚮몢由?+ 紐⑤뱺 cross-hair ?놁씠
         ap = self.active_panel
         was_active = False
         if ap and ap._active:
@@ -2732,7 +3397,7 @@ class ViewerGrid(QWidget):
             ap._active = False
             ap.update()
 
-        # 모든 패널의 crosshair 잠시 끄기 + 백업
+        # 紐⑤뱺 ?⑤꼸??crosshair ?좎떆 ?꾧린 + 諛깆뾽
         ch_backup = []
         for p in self.panels:
             ch_backup.append((p, p._crosshair))
@@ -2740,7 +3405,7 @@ class ViewerGrid(QWidget):
                 p._crosshair = None
                 if p._raw_pix:
                     p._make_display()
-        # 강제 즉시 paint 처리
+        # 媛뺤젣 利됱떆 paint 泥섎━
         for p in self.panels:
             p.repaint()
         QApplication.processEvents()
@@ -2759,12 +3424,12 @@ class ViewerGrid(QWidget):
         return pix
 
 
-# ─────────────────────────────────────────────────────────────
-#  Copy Area 영역 선택 오버레이
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  Copy Area ?곸뿭 ?좏깮 ?ㅻ쾭?덉씠
+# ?????????????????????????????????????????????????????????????
 class _AreaSelector(QWidget):
-    """viewer_grid 위에 띄워서 사용자가 좌클릭 드래그로 직사각형 영역을 선택.
-    완료/취소 시 callback(rect) 호출. rect는 viewer_grid 좌표계의 QRect 또는 None(취소)."""
+    """viewer_grid ?꾩뿉 ?꾩썙???ъ슜?먭? 醫뚰겢由??쒕옒洹몃줈 吏곸궗媛곹삎 ?곸뿭???좏깮.
+    ?꾨즺/痍⑥냼 ??callback(rect) ?몄텧. rect??viewer_grid 醫뚰몴怨꾩쓽 QRect ?먮뒗 None(痍⑥냼)."""
     def __init__(self, target, callback):
         super().__init__(target)
         self.target   = target
@@ -2800,8 +3465,8 @@ class _AreaSelector(QWidget):
         self._finish(cancel=False)
 
     def _finish(self, cancel):
-        # 콜백 전에 selector를 먼저 숨김 — callback 안에서 grab을 호출하면
-        # selector overlay가 결과에 포함되어 어두운 사각형/외곽선이 캡처되는 걸 방지
+        # 肄쒕갚 ?꾩뿉 selector瑜?癒쇱? ?④? ??callback ?덉뿉??grab???몄텧?섎㈃
+        # selector overlay媛 寃곌낵???ы븿?섏뼱 ?대몢???ш컖???멸낸?좎씠 罹≪쿂?섎뒗 嫄?諛⑹?
         self.hide()
         QApplication.processEvents()
         if cancel or self._start is None or self._cur is None:
@@ -2816,34 +3481,34 @@ class _AreaSelector(QWidget):
 
     def paintEvent(self, event):
         p = QPainter(self)
-        # 화면 전체 어두운 오버레이 (선택 영역 제외)
+        # ?붾㈃ ?꾩껜 ?대몢???ㅻ쾭?덉씠 (?좏깮 ?곸뿭 ?쒖쇅)
         if self._start is not None and self._cur is not None:
             x1, y1 = self._start.x(), self._start.y()
             x2, y2 = self._cur.x(),   self._cur.y()
             sel = QRect(min(x1, x2), min(y1, y2),
                         abs(x2 - x1), abs(y2 - y1))
-            # 4 영역 어둡게
+            # 4 ?곸뿭 ?대몼寃?
             dark = QColor(0, 0, 0, 128)
-            p.fillRect(0, 0, self.width(), sel.top(), dark)            # 위
+            p.fillRect(0, 0, self.width(), sel.top(), dark)            # ??
             p.fillRect(0, sel.bottom() + 1,
-                       self.width(), self.height() - sel.bottom() - 1, dark)  # 아래
+                       self.width(), self.height() - sel.bottom() - 1, dark)  # ?꾨옒
             p.fillRect(0, sel.top(),
-                       sel.left(), sel.height() + 1, dark)             # 좌
+                       sel.left(), sel.height() + 1, dark)             # 醫?
             p.fillRect(sel.right() + 1, sel.top(),
-                       self.width() - sel.right() - 1, sel.height() + 1, dark)  # 우
-            # 선택 사각형 외곽선
+                       self.width() - sel.right() - 1, sel.height() + 1, dark)  # ??
+            # ?좏깮 ?ш컖???멸낸??
             pen = QPen(QColor(0, 200, 255), 2)
             p.setPen(pen)
             p.drawRect(sel)
-            # 우상단에 크기 표시
-            label = f"{sel.width()} × {sel.height()}"
+            # ?곗긽?⑥뿉 ?ш린 ?쒖떆
+            label = f"{sel.width()} x {sel.height()}"
             p.setFont(QFont("Consolas", 11))
             p.fillRect(sel.left(), sel.top() - 22,
                        len(label) * 9 + 12, 20, QColor(0, 0, 0, 200))
             p.setPen(QColor(0, 200, 255))
             p.drawText(sel.left() + 6, sel.top() - 7, label)
         else:
-            # 시작 전: 전체 살짝 어둡게 + 안내 메시지
+            # ?쒖옉 ?? ?꾩껜 ?댁쭩 ?대몼寃?+ ?덈궡 硫붿떆吏
             p.fillRect(self.rect(), QColor(0, 0, 0, 60))
             p.setPen(QColor(0, 200, 255))
             p.setFont(QFont("Arial", 14, QFont.Weight.Bold))
@@ -2851,17 +3516,17 @@ class _AreaSelector(QWidget):
                        tr('area_select_hint'))
 
 
-# ─────────────────────────────────────────────────────────────
-#  레이아웃 그리드 피커 (PowerPoint 스타일)
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  ?덉씠?꾩썐 洹몃━???쇱빱 (PowerPoint ?ㅽ???
+# ?????????????????????????????????????????????????????????????
 class _LayoutPicker(QWidget):
-    """Popup 3×3 grid picker — hover to preview, click to apply layout."""
+    """Popup 3횞3 grid picker ??hover to preview, click to apply layout."""
     layout_selected = pyqtSignal(str)   # e.g. "2x3"
 
     CELL = 30   # px per cell
     GAP  = 5    # gap between cells
     PAD  = 12   # outer padding
-    N    = 3    # grid dimension (3×3 max)
+    N    = 3    # grid dimension (3횞3 max)
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
@@ -2872,7 +3537,7 @@ class _LayoutPicker(QWidget):
         self.setFixedSize(inner + self.PAD * 2,
                           inner + self.PAD * 2 + 24)  # 24 = label row
 
-    # ── geometry helpers ────────────────────────────────────────
+    # ?? geometry helpers ????????????????????????????????????????
     def _cell_rect(self, c, r):
         x = self.PAD + c * (self.CELL + self.GAP)
         y = self.PAD + r * (self.CELL + self.GAP)
@@ -2893,7 +3558,7 @@ class _LayoutPicker(QWidget):
             return 0, 0
         return int(cx) + 1, int(ry) + 1
 
-    # ── paint ───────────────────────────────────────────────────
+    # ?? paint ???????????????????????????????????????????????????
     def paintEvent(self, _event):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -2916,7 +3581,7 @@ class _LayoutPicker(QWidget):
 
         # dimension label
         if hc > 0 and hr > 0:
-            label = f"{hr} × {hc}"
+            label = f"{hr} x {hc}"
             p.setPen(QColor(220, 220, 220))
         else:
             label = "Layout"
@@ -2926,7 +3591,7 @@ class _LayoutPicker(QWidget):
         p.drawText(QRect(0, label_y, self.width(), 20),
                    Qt.AlignmentFlag.AlignCenter, label)
 
-    # ── interaction ─────────────────────────────────────────────
+    # ?? interaction ?????????????????????????????????????????????
     def mouseMoveEvent(self, event):
         c, r = self._hit(event.pos())
         if (c, r) != (self._hc, self._hr):
@@ -2951,9 +3616,9 @@ class _LayoutPicker(QWidget):
         self.update()
 
 
-# ─────────────────────────────────────────────────────────────
-#  시리즈 사이드바
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  ?쒕━利??ъ씠?쒕컮
+# ?????????????????????????????????????????????????????????????
 class SeriesSidebar(QWidget):
     series_double_clicked = pyqtSignal(int)
 
@@ -2992,8 +3657,8 @@ class SeriesSidebar(QWidget):
         )
         layout.addWidget(self._tip_label)
 
-        # ▲ 위로 스크롤 버튼 (목록 위쪽)
-        self.up_btn = QPushButton("▲")
+        # ???꾨줈 ?ㅽ겕濡?踰꾪듉 (紐⑸줉 ?꾩そ)
+        self.up_btn = QPushButton("^")
         self.up_btn.setStyleSheet("""
             QPushButton {
                 background:#1a1a1a; color:#ccc; border:none;
@@ -3021,14 +3686,14 @@ class SeriesSidebar(QWidget):
             QListWidget::item:selected { background:#004a8f;color:white; }
             QListWidget::item:hover    { background:#1e3a5f; }
         """)
-        self.lw.setIconSize(QSize(144, 144))   # 썸네일 표시 크기 (2배)
+        self.lw.setIconSize(QSize(144, 144))   # ?몃꽕???쒖떆 ?ш린 (2諛?
         self.lw.itemDoubleClicked.connect(
             lambda item: self.series_double_clicked.emit(self.lw.row(item))
         )
         layout.addWidget(self.lw, 1)
 
-        # ▼ 아래로 스크롤 버튼 (목록 아래)
-        self.down_btn = QPushButton("▼")
+        # ???꾨옒濡??ㅽ겕濡?踰꾪듉 (紐⑸줉 ?꾨옒)
+        self.down_btn = QPushButton("v")
         self.down_btn.setStyleSheet("""
             QPushButton {
                 background:#1a1a1a; color:#ccc; border:none;
@@ -3045,32 +3710,32 @@ class SeriesSidebar(QWidget):
         layout.addWidget(self.down_btn)
 
     def _scroll_by(self, lines):
-        """목록을 lines줄만큼 스크롤 (▲/▼ 버튼)."""
+        """紐⑸줉??lines以꾨쭔???ㅽ겕濡?(????踰꾪듉)."""
         sb = self.lw.verticalScrollBar()
         sb.setValue(sb.value() + lines * sb.singleStep())
 
     def set_study(self, ds):
-        patient  = str(getattr(ds, 'PatientName', 'Anonymous')).strip()
+        patient  = _tag(ds, 'PatientName', 'Anonymous')
         pat_id   = _tag(ds, 'PatientID',  '')
         sex      = _tag(ds, 'PatientSex', '')
         age      = _tag(ds, 'PatientAge', '')
         date     = _fmt_date(_tag(ds, 'StudyDate', ''))
         modality = _tag(ds, 'Modality',   '')
         self.study_info.setText(
-            f"👤 {patient}\n"
+            f"{patient}\n"
             f"   {pat_id}  {sex}  {age}\n"
-            f"📅 {date}  [{modality}]"
+            f"{date}  [{modality}]"
         )
 
     def populate(self, series_list, thumbnails=None):
         """series_list: [(label, pairs), ...]
-        thumbnails: [QPixmap or None, ...]  — 같은 길이"""
+        thumbnails: [QPixmap or None, ...]  ??媛숈? 湲몄씠"""
         self.lw.clear()
 
-        # ── 아이콘(144px) + 좌우 여백을 제외한 텍스트 가용 폭 ──
+        # ?? ?꾩씠肄?144px) + 醫뚯슦 ?щ갚???쒖쇅???띿뒪??媛??????
         avail_w = max(50, self.width() - 144 - 22)
 
-        # 1단계: 모든 항목 데이터 수집 + 첫 줄(설명) 목록 생성
+        # 1?④퀎: 紐⑤뱺 ??ぉ ?곗씠???섏쭛 + 泥?以??ㅻ챸) 紐⑸줉 ?앹꽦
         items_data   = []
         first_lines  = []
         for label, pairs in series_list:
@@ -3081,10 +3746,10 @@ class SeriesSidebar(QWidget):
             first_lines.append(f"[{num}] {desc}")
             items_data.append((label, num, desc, mod, len(pairs)))
 
-        # 2단계: 모든 첫 줄이 한 줄에 들어오는 최대 폰트 크기 계산
+        # 2?④퀎: 紐⑤뱺 泥?以꾩씠 ??以꾩뿉 ?ㅼ뼱?ㅻ뒗 理쒕? ?고듃 ?ш린 怨꾩궛
         font_px = _fit_font_px(first_lines, avail_w, "Consolas", min_px=11, max_px=18)
 
-        # 3단계: 최소 크기에서도 넘치는 항목이 있으면 word-wrap 활성화
+        # 3?④퀎: 理쒖냼 ?ш린?먯꽌???섏튂????ぉ???덉쑝硫?word-wrap ?쒖꽦??
         chk_f  = QFont("Consolas")
         chk_f.setPixelSize(font_px)
         chk_fm = QFontMetrics(chk_f)
@@ -3092,7 +3757,7 @@ class SeriesSidebar(QWidget):
                          for ln in first_lines if ln.strip())
         self.lw.setWordWrap(needs_wrap)
 
-        # 4단계: 계산된 크기로 stylesheet 업데이트
+        # 4?④퀎: 怨꾩궛???ш린濡?stylesheet ?낅뜲?댄듃
         self.lw.setStyleSheet(f"""
             QListWidget {{
                 background:#111;color:#ccc;
@@ -3103,9 +3768,9 @@ class SeriesSidebar(QWidget):
             QListWidget::item:hover    {{ background:#1e3a5f; }}
         """)
 
-        # 5단계: 항목 추가
+        # 5?④퀎: ??ぉ 異붽?
         for i, (label, num, desc, mod, count) in enumerate(items_data):
-            item = QListWidgetItem(f"[{num}] {desc}\n      {count}개  {mod}")
+            item = QListWidgetItem(f"[{num}] {desc}\n      {count} images  {mod}")
             item.setToolTip(label)
             if thumbnails and i < len(thumbnails) and thumbnails[i] is not None:
                 item.setIcon(QIcon(thumbnails[i]))
@@ -3119,23 +3784,26 @@ class SeriesSidebar(QWidget):
         self._tip_label.setText(tr('sidebar_tip'))
 
 
-# ─────────────────────────────────────────────────────────────
-#  메인 윈도우
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  硫붿씤 ?덈룄??
+# ?????????????????????????????????????????????????????????????
 class DicomViewer(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Hwang Viewer for Radiologic Presentation v3.11")
+        self.setWindowTitle("Hwang Viewer for Radiologic Presentation v4.1")
         self.setAcceptDrops(True)
         self._series_list = []
-        self._series_page = 0      # 현재 페이지 (0-based)
-        self._pan_mode    = False  # P 토글: 좌클릭 드래그가 영상 panning이 됨
+        self._series_page = 0      # ?꾩옱 ?섏씠吏 (0-based)
+        self._pan_mode    = False
+        self._annotation_tool = 'none'
+        self._annotation_actions = {}
+        self._build_annotation_actions()
 
         self._build_ui()
         self._build_menu()
         self._build_toolbar()
         LocaleManager.instance().language_changed.connect(self.retranslate)
-        self.showMaximized()       # ② 시작부터 전체화면
+        self.showMaximized()       # ???쒖옉遺???꾩껜?붾㈃
 
     def _build_ui(self):
         central = QWidget()
@@ -3157,7 +3825,7 @@ class DicomViewer(QMainWindow):
         hbox.addWidget(self.sidebar)
         hbox.addWidget(self.viewer_grid, 1)
 
-        # statusBar 좌측에 영구 progress bar (평소엔 숨김)
+        # statusBar 醫뚯륫???곴뎄 progress bar (?됱냼???④?)
         self._progress = QProgressBar()
         self._progress.setMaximumWidth(360)
         self._progress.setMinimumWidth(280)
@@ -3173,51 +3841,62 @@ class DicomViewer(QMainWindow):
         mb = self.menuBar()
 
         fm = mb.addMenu("File")
-        self._act(fm, "📂  Open File...",    "Ctrl+O",       self.open_file)
-        self._act(fm, "📁  Open Folder...",  "Ctrl+Shift+O", self.open_folder)
+        self._act(fm, "Open File...",    "Ctrl+O",       self.open_file)
+        self._act(fm, "Open Folder...",  "Ctrl+Shift+O", self.open_folder)
         fm.addSeparator()
-        self._act(fm, "💾  Save Image...",   "Ctrl+S",       self.save_active)
-        self._act(fm, "💾  Save Screen...", "Ctrl+Shift+S", self.save_all)
+        self._act(fm, "Save Img...",    "Ctrl+S",       self.save_active)
+        self._act(fm, "Save Scr...",    "Ctrl+Shift+S", self.save_all)
+        fm.addSeparator()
+        self._act(fm, "Save Area...", "Ctrl+Alt+S", self.save_area)
         fm.addSeparator()
         self._act(fm, "Quit", "Ctrl+Q", self.close)
 
         em = mb.addMenu("Edit")
-        self._act(em, "📋  Copy Image",   "Ctrl+C",       self.copy_active)
-        self._act(em, "🗂️  Copy Screen",  "Ctrl+Shift+C", self.copy_all)
-        self._act(em, "✂️  Copy Area...", "Ctrl+Alt+C",   self.copy_area)
+        self._act(em, "Copy Img",     "Ctrl+C",       self.copy_active)
+        self._act(em, "Copy Scr",     "Ctrl+Shift+C", self.copy_all)
+        self._act(em, "Copy Area...", "Ctrl+Alt+C",   self.copy_area)
+
+        self._act(em, "Save Area...", "Ctrl+Alt+S", self.save_area)
 
         vm = mb.addMenu("View")
-        # ── Layout 서브메뉴 (1×1 ~ 3×3 9종) ───────────────
-        lm = vm.addMenu("⊞  Layout")
-        self._act(lm, "1 × 1",  "Ctrl+1", lambda: self._change_layout('1x1'))
-        self._act(lm, "1 × 2",  "",       lambda: self._change_layout('1x2'))
-        self._act(lm, "1 × 3",  "",       lambda: self._change_layout('1x3'))
+        # ?? Layout ?쒕툕硫붾돱 (1횞1 ~ 3횞3 9醫? ???????????????
+        lm = vm.addMenu("Layout")
+        self._act(lm, "1 x 1",  "Ctrl+1", lambda: self._change_layout('1x1'))
+        self._act(lm, "1 x 2",  "",       lambda: self._change_layout('1x2'))
+        self._act(lm, "1 x 3",  "",       lambda: self._change_layout('1x3'))
         lm.addSeparator()
-        self._act(lm, "2 × 1",  "",       lambda: self._change_layout('2x1'))
-        self._act(lm, "2 × 2",  "Ctrl+2", lambda: self._change_layout('2x2'))
-        self._act(lm, "2 × 3",  "",       lambda: self._change_layout('2x3'))
+        self._act(lm, "2 x 1",  "",       lambda: self._change_layout('2x1'))
+        self._act(lm, "2 x 2",  "Ctrl+2", lambda: self._change_layout('2x2'))
+        self._act(lm, "2 x 3",  "",       lambda: self._change_layout('2x3'))
         lm.addSeparator()
-        self._act(lm, "3 × 1",  "",       lambda: self._change_layout('3x1'))
-        self._act(lm, "3 × 2",  "",       lambda: self._change_layout('3x2'))
-        self._act(lm, "3 × 3",  "Ctrl+3", lambda: self._change_layout('3x3'))
+        self._act(lm, "3 x 1",  "",       lambda: self._change_layout('3x1'))
+        self._act(lm, "3 x 2",  "",       lambda: self._change_layout('3x2'))
+        self._act(lm, "3 x 3",  "Ctrl+3", lambda: self._change_layout('3x3'))
         vm.addSeparator()
-        self._act(vm, "🏷️  Tag Overlay ON/OFF",        "T",      self._toggle_tags)
-        self._act(vm, "↺  Reset W/L",                   "R",      self._reset_active)
-        self._act(vm, "⛶  Toggle 1×1 ↔ Multi  (Space)", "Space",  self._toggle_panel_zoom)
-        self._act(vm, "✛  Cross-reference ON/OFF",      "X",      self._toggle_cross_link)
-        self._act(vm, "✋  Panning ON/OFF",              "P",      self._toggle_pan_mode)
+        self._act(vm, "Tag / Annotation Display",  "T",      self._toggle_tags)
+        self._act(vm, "Reset W/L",                 "R",      self._reset_active)
+        self._act(vm, "Toggle 1x1 / Multi",        "Space",  self._toggle_panel_zoom)
+        self._act(vm, "Cross-reference ON/OFF",    "X",      self._toggle_cross_link)
+        self._act(vm, "Panning ON/OFF",            "P",      self._toggle_pan_mode)
         vm.addSeparator()
         self._act_img_offset = self._act(vm, tr('menu_img_offset'), "", self.set_image_offset_dialog)
-        self._act(vm, "↺  Reset Position",             "Ctrl+G", self.reset_image_offset)
+        self._act(vm, "Reset Pos",                  "Ctrl+G", self.reset_image_offset)
         vm.addSeparator()
-        self._act(vm, "⊞  Fill Grid with Series", "", self._fill_grid_with_series)
+        self._act(vm, "Fill Grid with Series", "", self._fill_grid_with_series)
+
+        am = mb.addMenu("Annotation")
+        for tool in ('measure', 'arrow', 'text', 'roi'):
+            am.addAction(self._annotation_actions[tool])
+        am.addSeparator()
+        am.addAction(self._clear_annotation_action)
+        am.addAction(self._clear_all_annotation_action)
 
         hm = mb.addMenu("Help")
-        self._act(hm, "⌨  Keyboard & Mouse Shortcuts...", "F1", self._show_shortcuts)
+        self._act(hm, "Keyboard & Mouse Shortcuts...", "F1", self._show_shortcuts)
         hm.addSeparator()
-        self._act(hm, "ⓘ  About...", "", self._show_about)
+        self._act(hm, "About...", "", self._show_about)
         hm.addSeparator()
-        lang_menu = hm.addMenu("🌐  Language")
+        lang_menu = hm.addMenu("Language")
         self._lang_actions = {}
         for _code, _label in [('ko', '한국어'), ('en', 'English'), ('es', 'Español'),
                                ('ja', '日本語'), ('zh', '中文')]:
@@ -3235,10 +3914,150 @@ class DicomViewer(QMainWindow):
         menu.addAction(a)
         return a
 
+    def _make_icon(self, kind, size=32):
+        pix = QPixmap(size, size)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        fg = QColor(220, 225, 230)
+        accent = QColor(0, 160, 255)
+        warn = QColor(255, 190, 55)
+        ok = QColor(0, 220, 160)
+        danger = QColor(255, 90, 90)
+        painter.setPen(QPen(fg, 2))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        if kind == 'file':
+            painter.drawRect(8, 5, 15, 22)
+            painter.drawLine(17, 5, 23, 11)
+            painter.drawLine(17, 5, 17, 11)
+            painter.drawLine(17, 11, 23, 11)
+        elif kind == 'folder':
+            painter.drawLine(5, 11, 13, 11)
+            painter.drawLine(13, 11, 15, 8)
+            painter.drawLine(15, 8, 25, 8)
+            painter.drawRect(5, 11, 22, 15)
+        elif kind == 'layout':
+            for x in (6, 17):
+                for y in (6, 17):
+                    painter.drawRect(x, y, 9, 9)
+        elif kind == 'fill':
+            painter.setPen(QPen(accent, 2))
+            painter.drawRect(6, 6, 20, 20)
+            painter.drawLine(10, 16, 22, 16)
+            painter.drawLine(16, 10, 16, 22)
+        elif kind == 'prev':
+            painter.setBrush(fg)
+            painter.drawPolygon([QPoint(10, 16), QPoint(21, 8), QPoint(21, 24)])
+        elif kind == 'next':
+            painter.setBrush(fg)
+            painter.drawPolygon([QPoint(22, 16), QPoint(11, 8), QPoint(11, 24)])
+        elif kind == 'tags':
+            painter.setPen(QPen(accent, 2))
+            painter.drawRect(7, 8, 18, 15)
+            font = QFont("Arial")
+            font.setBold(True)
+            font.setPixelSize(12)
+            painter.setFont(font)
+            painter.drawText(QRect(7, 8, 18, 15), Qt.AlignmentFlag.AlignCenter, "T")
+        elif kind == 'wl':
+            painter.drawEllipse(7, 7, 18, 18)
+            painter.drawLine(16, 7, 16, 25)
+            painter.drawLine(9, 21, 23, 11)
+        elif kind == 'position':
+            painter.setPen(QPen(accent, 2))
+            painter.drawLine(16, 5, 16, 27)
+            painter.drawLine(5, 16, 27, 16)
+            painter.drawEllipse(12, 12, 8, 8)
+        elif kind == 'cross':
+            painter.setPen(QPen(ok, 2))
+            painter.drawLine(7, 7, 25, 25)
+            painter.drawLine(25, 7, 7, 25)
+        elif kind == 'pan':
+            painter.drawLine(16, 6, 16, 26)
+            painter.drawLine(6, 16, 26, 16)
+            painter.drawLine(16, 6, 12, 10)
+            painter.drawLine(16, 6, 20, 10)
+            painter.drawLine(16, 26, 12, 22)
+            painter.drawLine(16, 26, 20, 22)
+            painter.drawLine(6, 16, 10, 12)
+            painter.drawLine(6, 16, 10, 20)
+            painter.drawLine(26, 16, 22, 12)
+            painter.drawLine(26, 16, 22, 20)
+        elif kind == 'copy':
+            painter.drawRect(10, 8, 14, 17)
+            painter.drawRect(6, 5, 14, 17)
+        elif kind == 'area':
+            painter.setPen(QPen(warn, 2, Qt.PenStyle.DashLine))
+            painter.drawRect(7, 7, 18, 18)
+        elif kind == 'save':
+            painter.drawRect(7, 6, 18, 20)
+            painter.drawRect(11, 18, 10, 6)
+            painter.drawLine(11, 6, 11, 13)
+            painter.drawLine(21, 6, 21, 13)
+        elif kind == 'measure':
+            painter.setPen(QPen(warn, 2))
+            painter.drawLine(6, 22, 26, 10)
+            for t in range(0, 5):
+                x = 8 + t * 4
+                y = 21 - t * 2
+                painter.drawLine(x, y, x + 2, y + 4)
+        elif kind == 'arrow':
+            painter.setPen(QPen(QColor(255, 145, 0), 2))
+            painter.drawLine(7, 23, 24, 8)
+            painter.drawLine(24, 8, 22, 17)
+            painter.drawLine(24, 8, 15, 10)
+        elif kind == 'text':
+            painter.setPen(QPen(fg, 2))
+            font = QFont("Arial")
+            font.setBold(True)
+            font.setPixelSize(22)
+            painter.setFont(font)
+            painter.drawText(QRect(5, 3, 22, 25), Qt.AlignmentFlag.AlignCenter, "T")
+        elif kind == 'roi':
+            painter.setPen(QPen(ok, 2))
+            painter.drawEllipse(7, 7, 18, 18)
+            font = QFont("Arial")
+            font.setBold(True)
+            font.setPixelSize(13)
+            painter.setFont(font)
+            painter.drawText(QRect(7, 7, 18, 18), Qt.AlignmentFlag.AlignCenter, "O")
+        elif kind == 'clear':
+            painter.setPen(QPen(danger, 2))
+            painter.drawLine(8, 8, 24, 24)
+            painter.drawLine(24, 8, 8, 24)
+        elif kind == 'clear_all':
+            painter.setPen(QPen(danger, 2))
+            painter.drawRect(7, 7, 18, 18)
+            painter.drawLine(9, 9, 23, 23)
+            painter.drawLine(23, 9, 9, 23)
+
+        painter.end()
+        return QIcon(pix)
+
+    def _icon_action(self, label, slot=None, icon=None):
+        action = QAction(self._make_icon(icon), label, self) if icon else QAction(label, self)
+        if slot:
+            action.triggered.connect(slot)
+        return action
+
+    def _build_annotation_actions(self):
+        labels = {'measure': 'Measure', 'arrow': 'Arrow', 'text': 'Text', 'roi': 'ROI'}
+        self._annotation_actions = {}
+        for tool, label in labels.items():
+            action = QAction(self._make_icon(tool), label, self)
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, t=tool: self._set_annotation_tool(t))
+            self._annotation_actions[tool] = action
+        self._clear_annotation_action = QAction(self._make_icon('clear'), "CLR Ann", self)
+        self._clear_annotation_action.triggered.connect(self._clear_active_annotations)
+        self._clear_all_annotation_action = QAction(self._make_icon('clear_all'), "CLR All Ann", self)
+        self._clear_all_annotation_action.triggered.connect(self._clear_all_annotations)
+
     def _show_layout_picker(self):
         picker = _LayoutPicker(self)
         picker.layout_selected.connect(self._change_layout)
-        for tb in (self._toolbar1, self._toolbar2):
+        for tb in getattr(self, '_dynamic_toolbars', (self._toolbar1, self._toolbar2)):
             w = tb.widgetForAction(self._layout_action)
             if w is not None:
                 picker.move(w.mapToGlobal(QPoint(0, w.height())))
@@ -3254,7 +4073,7 @@ class DicomViewer(QMainWindow):
         current = LocaleManager.instance().lang()
         labels = {'ko': '한국어', 'en': 'English', 'es': 'Español', 'ja': '日本語', 'zh': '中文'}
         for code, act in self._lang_actions.items():
-            act.setText(('● ' if code == current else '  ') + labels[code])
+            act.setText(('* ' if code == current else '  ') + labels[code])
 
     def retranslate(self):
         self._act_img_offset.setText(tr('menu_img_offset'))
@@ -3262,7 +4081,7 @@ class DicomViewer(QMainWindow):
         self.sidebar.retranslate()
         self.viewer_grid.update()
 
-    # ── progress bar 헬퍼 ───────────────────────────────────
+    # ?? progress bar ?ы띁 ???????????????????????????????????
     def _progress_show(self, label, value, total):
         self._progress.setRange(0, max(1, total))
         self._progress.setValue(value)
@@ -3275,12 +4094,12 @@ class DicomViewer(QMainWindow):
         self._progress.hide()
         QApplication.processEvents()
 
-    # ── 시리즈 가운데 슬라이스로 썸네일(QPixmap) 생성 ──────
+    # ?? ?쒕━利?媛?대뜲 ?щ씪?댁뒪濡??몃꽕??QPixmap) ?앹꽦 ??????
     def _make_thumbnail(self, pairs, size=144):
         """
-        pairs: [(Path, hdr_ds), ...] (이미 InstanceNumber 정렬됨)
-        가운데 슬라이스의 픽셀을 디코딩해서 size×size QPixmap 반환.
-        실패하면 None.
+        pairs: [(Path, hdr_ds), ...] (?대? InstanceNumber ?뺣젹??
+        媛?대뜲 ?щ씪?댁뒪???쎌????붿퐫?⑺빐??size횞size QPixmap 諛섑솚.
+        ?ㅽ뙣?섎㈃ None.
         """
         if not pairs:
             return None
@@ -3292,7 +4111,7 @@ class DicomViewer(QMainWindow):
             intercept = float(getattr(ds, 'RescaleIntercept', 0))
             arr = arr.astype(np.float32) * slope + intercept
 
-            # multi-channel / multi-frame 처리 — _render와 동일 로직
+            # multi-channel / multi-frame 泥섎━ ??_render? ?숈씪 濡쒖쭅
             if arr.ndim == 3:
                 if arr.shape[2] in (3, 4):
                     arr = (arr[..., 0] * 0.299
@@ -3311,7 +4130,7 @@ class DicomViewer(QMainWindow):
             elif arr.ndim != 2:
                 return None
 
-            # auto W/L (5–95 percentile)
+            # auto W/L (5??5 percentile)
             p5, p95 = np.percentile(arr, [5, 95])
             wl = (p5 + p95) / 2.0
             ww = max(1.0, float(p95 - p5))
@@ -3321,7 +4140,7 @@ class DicomViewer(QMainWindow):
             arr8 = np.ascontiguousarray(arr8)
             h, w = arr8.shape
             qimg = QImage(arr8.tobytes(), w, h, w, QImage.Format.Format_Grayscale8)
-            pix  = QPixmap.fromImage(qimg.copy())  # bytes 라이프타임 분리
+            pix  = QPixmap.fromImage(qimg.copy())  # bytes ?쇱씠?꾪???遺꾨━
             return pix.scaled(
                 size, size,
                 Qt.AspectRatioMode.KeepAspectRatio,
@@ -3332,14 +4151,14 @@ class DicomViewer(QMainWindow):
 
     def _build_toolbar(self):
         p = self._toolbar_params()
-        self._tb_has_break     = True   # break exists between tb1/tb2 initially
         self._tb_widths_stale  = True   # widths need measuring on first layout call
         self._tb_base_widths   = []     # widths measured at DPI-base font
         self._tb_font_applied  = None   # font_px currently reflected in stylesheet
 
-        # ── Two toolbar rows (content distributed dynamically) ────
+        # ?? Toolbar rows (content distributed dynamically) ????????
         tb1 = QToolBar("Row 1", self)
         tb1.setMovable(False)
+        tb1.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         tb1.setIconSize(QSize(p['icon_sz'], p['icon_sz']))
         self.addToolBar(tb1)
         self._toolbar1 = tb1
@@ -3348,31 +4167,40 @@ class DicomViewer(QMainWindow):
 
         tb2 = QToolBar("Row 2", self)
         tb2.setMovable(False)
+        tb2.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         tb2.setIconSize(QSize(p['icon_sz'], p['icon_sz']))
         self.addToolBar(tb2)
         self._toolbar2 = tb2
+        self._dynamic_toolbars = [tb1, tb2]
 
-        # ── helpers ───────────────────────────────────────────────
-        def act(label, slot=None):
-            a = QAction(label, self)
-            if slot:
-                a.triggered.connect(slot)
-            return a
+        for row in range(3, 6):
+            self.addToolBarBreak()
+            tb = QToolBar(f"Row {row}", self)
+            tb.setMovable(False)
+            tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            tb.setIconSize(QSize(p['icon_sz'], p['icon_sz']))
+            self.addToolBar(tb)
+            tb.hide()
+            self._dynamic_toolbars.append(tb)
+
+        # ?? helpers ???????????????????????????????????????????????
+        def act(label, slot=None, icon=None):
+            return self._icon_action(label, slot, icon)
 
         def sep():
             a = QAction(self)
             a.setSeparator(True)
             return a
 
-        # ── Layout action (replaces QToolButton; position resolved via widgetForAction) ──
+        # ?? Layout action (replaces QToolButton; position resolved via widgetForAction) ??
         self._layout_action = act("⊞ Layout ▾", self._show_layout_picker)
 
-        # ── Page label action (replaces QLabel; dim-styled after each redistribution) ──
+        # ?? Page label action (replaces QLabel; dim-styled after each redistribution) ??
         self._page_action = act("  Series  -  ")
 
-        # ── Flat ordered list of ALL toolbar items ────────────────
+        # ?? Flat ordered list of ALL toolbar items ????????????????
         self._all_tb_actions = [
-            act("📂 File",         self.open_file),
+            act("📁 File",         self.open_file),
             act("📁 Folder",       self.open_folder),
             sep(),
             self._layout_action,
@@ -3382,33 +4210,41 @@ class DicomViewer(QMainWindow):
             act("◀",               self._series_prev_page),
             act("▶",               self._series_next_page),
             sep(),
-            act("🏷️ Tags",         self._toggle_tags),
+            act("🏷️ Tags",        self._toggle_tags),
             act("↺ W/L",           self._reset_active),
-            act("↺ Position",      self.reset_image_offset),
-            act("✛ Cross-ref",     self._toggle_cross_link),
-            act("✋ Panning",       self._toggle_pan_mode),
+            act("↺ Pos",           self.reset_image_offset),
+            act("✣ X-ref",         self._toggle_cross_link),
+            act("✋ Pan",          self._toggle_pan_mode),
             sep(),
-            act("📋 Copy Image",   self.copy_active),
-            act("🗂️ Copy Screen",  self.copy_all),
+            act("📋 Copy Img",     self.copy_active),
+            act("🗂️ Copy Scr",    self.copy_all),
             act("✂️ Copy Area",    self.copy_area),
             sep(),
-            act("💾 Save Image",   self.save_active),
-            act("💾 Save Screen",  self.save_all),
+            act("💾 Save Img",     self.save_active),
+            act("💾 Save Scr",     self.save_all),
+            act("💾 Save Area",    self.save_area),
+            sep(),
+            self._annotation_actions['measure'],
+            self._annotation_actions['arrow'],
+            self._annotation_actions['text'],
+            self._annotation_actions['roi'],
+            self._clear_annotation_action,
+            self._clear_all_annotation_action,
         ]
 
-        # ── Load all into tb1 initially; _update_toolbar_layout redistributes ──
+        # ?? Load all into tb1 initially; _update_toolbar_layout redistributes ??
         for a in self._all_tb_actions:
             tb1.addAction(a)
 
-    # ── DPI-adaptive toolbar scaling ────────────────────────────
+    # ?? DPI-adaptive toolbar scaling ????????????????????????????
 
     def _toolbar_params(self):
         """Compute toolbar font/icon sizes scaled to the current screen's logical DPI.
 
         Uses logicalDotsPerInch so that:
-          • 100%-scaling 4K (high physical DPI, no OS scaling) → scale > 1 (text grows)
-          • HiDPI-managed 4K (devicePixelRatio=2, logical DPI ≈ 96) → scale ≈ 1 (Qt handles it)
-          • Windows 125%/150% text scaling → scale 1.25/1.5
+          ??100%-scaling 4K (high physical DPI, no OS scaling) ??scale > 1 (text grows)
+          ??HiDPI-managed 4K (devicePixelRatio=2, logical DPI ??96) ??scale ??1 (Qt handles it)
+          ??Windows 125%/150% text scaling ??scale 1.25/1.5
         """
         screen = self.screen()
         if screen is None:
@@ -3416,14 +4252,14 @@ class DicomViewer(QMainWindow):
         dpi   = screen.logicalDotsPerInch() if screen else 96.0
         scale = max(0.6, min(3.0, dpi / 96.0))
 
-        font_px = max(8,  round(24 * scale * 0.64))  # 4/5 × 4/5 of baseline
+        font_px = max(8,  round(24 * scale * 0.64 * 0.84))
         icon_sz = max(14, round(24 * scale * 0.8))
         pad_v   = max(1,  round(3  * scale))   # tight vertical padding
-        pad_h   = max(6,  round(12 * scale))
-        spacing = max(1,  round(3  * scale))   # tight inter-button spacing
+        pad_h   = max(3,  round(6 * scale))
+        spacing = max(1,  round(2  * scale))   # tight inter-button spacing
         tb_pad  = max(1,  round(2  * scale))   # tight toolbar outer padding
 
-        # Anti-clipping: iteratively reduce font_px until text height ≤ icon height.
+        # Anti-clipping: iteratively reduce font_px until text height ??icon height.
         # This caps the toolbar row to max(icon_sz, font_h) + 2*pad_v, preventing
         # oversized text from blowing out the toolbar on extreme DPI values.
         f = QFont()
@@ -3470,10 +4306,9 @@ class DicomViewer(QMainWindow):
         """Re-apply DPI-scaled toolbar params (called on screen change)."""
         p = self._toolbar_params()
         self.setStyleSheet(self._app_stylesheet(p))
-        for attr in ('_toolbar1', '_toolbar2'):
-            if hasattr(self, attr):
-                getattr(self, attr).setIconSize(QSize(p['icon_sz'], p['icon_sz']))
-        self._tb_widths_stale = True  # button sizes changed — re-measure on next layout
+        for tb in getattr(self, '_dynamic_toolbars', []):
+            tb.setIconSize(QSize(p['icon_sz'], p['icon_sz']))
+        self._tb_widths_stale = True  # button sizes changed ??re-measure on next layout
         self._update_toolbar_layout()
 
     def _update_toolbar_layout(self):
@@ -3490,7 +4325,10 @@ class DicomViewer(QMainWindow):
             return
 
         actions   = self._all_tb_actions
-        available = self.width()
+        # QToolBar sizeHint can under-report a little on Windows/HiDPI with
+        # text-beside-icon buttons. Use a conservative row width so actions
+        # wrap before the right edge instead of being clipped.
+        available = max(320, int(self.width() * 0.98) - 24)
         if available <= 0:
             return
 
@@ -3501,19 +4339,18 @@ class DicomViewer(QMainWindow):
         def _do_measure(font_px):
             """Apply font_px to stylesheet, load all actions into tb1, return width list."""
             self.setStyleSheet(self._app_stylesheet(dict(p, font_px=font_px)))
-            for tb in (self._toolbar1, self._toolbar2):
+            for tb in self._dynamic_toolbars:
                 tb.setIconSize(QSize(p['icon_sz'], p['icon_sz']))
-            self._toolbar1.clear()
-            self._toolbar2.clear()
+                tb.clear()
             for a in actions:
                 self._toolbar1.addAction(a)
             return [
-                (self._toolbar1.widgetForAction(a).sizeHint().width()
+                ((self._toolbar1.widgetForAction(a).sizeHint().width() + 1)
                  if self._toolbar1.widgetForAction(a) else 0)
                 for a in actions
             ]
 
-        # ── (Re-)measure base widths when DPI changes ─────────────
+        # ?? (Re-)measure base widths when DPI changes ?????????????
         if getattr(self, '_tb_widths_stale', True):
             self._tb_base_widths  = _do_measure(base_font)
             self._tb_widths       = self._tb_base_widths[:]
@@ -3522,65 +4359,96 @@ class DicomViewer(QMainWindow):
 
         base_total = sum(self._tb_base_widths)
 
-        # ── Determine target font ─────────────────────────────────
+        # ?? Determine target font ?????????????????????????????????
         if 0 < base_total <= available:
-            # Everything fits in one row — scale font to fill width
+            # Everything fits in one row ??scale font to fill width
             target = min(round(base_font * available / base_total), max_font)
             target = max(target, base_font)
         else:
             target = base_font   # needs two rows; stay at base
 
-        # ── Apply target font if changed ──────────────────────────
+        # ?? Apply target font if changed ??????????????????????????
         if target != getattr(self, '_tb_font_applied', base_font):
             new_w = _do_measure(target)
             if target > base_font and sum(new_w) > available:
-                # Linear estimate overshot due to fixed padding — revert
+                # Linear estimate overshot due to fixed padding ??revert
                 new_w = _do_measure(base_font)
                 target = base_font
             self._tb_widths       = new_w
             self._tb_font_applied = target
 
-        # ── Find split: fill row 1 until width exceeded ───────────
-        cumulative = 0
-        split      = len(actions)
-        for i, w in enumerate(self._tb_widths):
-            cumulative += w
-            if cumulative > available:
-                split = i
-                break
+        rows = []
+        cur = []
+        cur_w = 0
+        for action, width in zip(actions, self._tb_widths):
+            if action.isSeparator() and not cur:
+                continue
+            if cur and cur_w + width > available:
+                while cur and cur[-1].isSeparator():
+                    cur.pop()
+                if cur:
+                    rows.append(cur)
+                cur = []
+                cur_w = 0
+                if action.isSeparator():
+                    continue
+            cur.append(action)
+            cur_w += width
+        while cur and cur[-1].isSeparator():
+            cur.pop()
+        if cur:
+            rows.append(cur)
 
-        # Trim trailing separators from row 1
-        while split > 0 and actions[split - 1].isSeparator():
-            split -= 1
+        if len(rows) > 2 and sum(self._tb_widths) <= available * 2:
+            best = None
+            best_score = None
+            for split in range(1, len(actions)):
+                left = list(actions[:split])
+                right = list(actions[split:])
+                while left and left[-1].isSeparator():
+                    left.pop()
+                while right and right[0].isSeparator():
+                    right.pop(0)
+                while right and right[-1].isSeparator():
+                    right.pop()
+                if not left or not right:
+                    continue
+                left_w = sum(self._tb_widths[actions.index(a)] for a in left)
+                right_w = sum(self._tb_widths[actions.index(a)] for a in right)
+                if left_w <= available and right_w <= available:
+                    score = max(left_w, right_w)
+                    if best is None or score < best_score:
+                        best = (left, right)
+                        best_score = score
+            if best is not None:
+                rows = list(best)
 
-        # Skip leading separators for row 2
-        row2_start = split
-        while row2_start < len(actions) and actions[row2_start].isSeparator():
-            row2_start += 1
+        if not rows:
+            rows = [[]]
 
-        # ── Redistribute ──────────────────────────────────────────
-        self._toolbar1.clear()
-        self._toolbar2.clear()
-        for a in actions[:split]:
-            self._toolbar1.addAction(a)
-        for a in actions[row2_start:]:
-            self._toolbar2.addAction(a)
+        while len(rows) > len(self._dynamic_toolbars):
+            self.addToolBarBreak()
+            tb = QToolBar(f"Row {len(self._dynamic_toolbars) + 1}", self)
+            tb.setMovable(False)
+            tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            tb.setIconSize(QSize(p['icon_sz'], p['icon_sz']))
+            self.addToolBar(tb)
+            self._dynamic_toolbars.append(tb)
 
-        # Dim the page-label action so it reads as a label, not a button
-        for tb in (self._toolbar1, self._toolbar2):
+        for i, tb in enumerate(self._dynamic_toolbars):
+            tb.clear()
+            if i < len(rows):
+                for action in rows[i]:
+                    tb.addAction(action)
+                tb.show()
+            else:
+                tb.hide()
+
+        for tb in self._dynamic_toolbars:
             w = tb.widgetForAction(self._page_action)
             if w is not None:
                 w.setStyleSheet("color:#aaa; background:transparent;")
                 break
-
-        # ── Toggle the row break ───────────────────────────────────
-        has_row2 = row2_start < len(actions)
-        if has_row2 != self._tb_has_break:
-            self._tb_has_break = has_row2
-            if has_row2:
-                self.insertToolBarBreak(self._toolbar2)
-            else:
-                self.removeToolBarBreak(self._toolbar2)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -3597,10 +4465,10 @@ class DicomViewer(QMainWindow):
     def _on_screen_changed(self, _screen):
         self._apply_toolbar_scale()
 
-    # ────────────────────────────────────────────────────────────
+    # ????????????????????????????????????????????????????????????
 
     def _page_size(self):
-        """현재 layout의 패널 수 (페이지당 시리즈 수)."""
+        """?꾩옱 layout???⑤꼸 ??(?섏씠吏???쒕━利???."""
         return max(1, len(self.viewer_grid.panels))
 
     def _update_page_label(self):
@@ -3614,7 +4482,7 @@ class DicomViewer(QMainWindow):
         end     = min(start + ps - 1, n)
         total_pages = (n - 1) // ps + 1
         self._page_action.setText(
-            f"  Series  {start}–{end} / {n}  (p{page+1}/{total_pages})  "
+            f"  Series  {start}-{end} / {n}  (p{page+1}/{total_pages})  "
         )
 
     def _series_next_page(self):
@@ -3646,7 +4514,7 @@ class DicomViewer(QMainWindow):
             return
         ps          = self._page_size()
         total_pages = max(1, (len(self._series_list) - 1) // ps + 1)
-        # 페이지 인덱스를 정상 범위로 보정 (layout 변경 등으로 빗나갔을 수 있음)
+        # ?섏씠吏 ?몃뜳?ㅻ? ?뺤긽 踰붿쐞濡?蹂댁젙 (layout 蹂寃??깆쑝濡?鍮쀫굹媛붿쓣 ???덉쓬)
         self._series_page = max(0, min(self._series_page, total_pages - 1))
         start       = self._series_page * ps
         page_series = self._series_list[start:start + ps]
@@ -3657,7 +4525,7 @@ class DicomViewer(QMainWindow):
         self.statusBar().showMessage(tr('status_page_nav').format(
             s=s, e=e, page=self._series_page + 1, total=total_pages))
 
-    # ── 파일 로드 ─────────────────────────────────────────────
+    # ?? ?뚯씪 濡쒕뱶 ?????????????????????????????????????????????
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open DICOM File", "",
@@ -3693,10 +4561,10 @@ class DicomViewer(QMainWindow):
         self._progress_show("Header scan", 0, total)
         self.statusBar().showMessage(tr('status_header_scan').format(total=total))
 
-        _t_start = time.perf_counter()  # ⏱ TIMER: 전체 시작
+        _t_start = time.perf_counter()  # ??TIMER: ?꾩껜 ?쒖옉
 
-        # ── 1단계: 헤더 병렬 읽기 (캐시 우선) ──────────────────
-        _t0       = time.perf_counter()  # ⏱ TIMER: 헤더 스캔 시작
+        # ?? 1?④퀎: ?ㅻ뜑 蹂묐젹 ?쎄린 (罹먯떆 ?곗꽑) ??????????????????
+        _t0       = time.perf_counter()  # ??TIMER: ?ㅻ뜑 ?ㅼ틪 ?쒖옉
         file_headers: list = []
         cache_key = str(p.resolve()) if p.is_dir() else None
         cache_hit = False
@@ -3707,7 +4575,7 @@ class DicomViewer(QMainWindow):
                 file_headers = list(cached_headers)
                 cache_hit    = True
             else:
-                del _header_cache[cache_key]   # 파일 수 변경 → 캐시 무효화
+                del _header_cache[cache_key]   # ?뚯씪 ??蹂寃???罹먯떆 臾댄슚??
 
         if not file_headers:
             done      = 0
@@ -3729,9 +4597,9 @@ class DicomViewer(QMainWindow):
             if cache_key and file_headers:
                 _header_cache[cache_key] = (total, list(file_headers))
 
-        _t1 = time.perf_counter()  # ⏱ TIMER: 헤더 스캔 종료
-        print(f"[TIMER] 1단계 헤더 스캔:    {_t1-_t0:.3f}s  "
-              f"({total}파일, {len(file_headers)}성공)"
+        _t1 = time.perf_counter()  # ??TIMER: ?ㅻ뜑 ?ㅼ틪 醫낅즺
+        print(f"[TIMER] 1단계 헤더 스캔:     {_t1-_t0:.3f}s  "
+              f"({total}개 파일, {len(file_headers)}개 성공)"
               + (" [캐시 히트]" if cache_hit else ""))
 
         if not file_headers:
@@ -3740,8 +4608,8 @@ class DicomViewer(QMainWindow):
             QMessageBox.warning(self, tr('dlg_error_title'), tr('dlg_no_dicom'))
             return
 
-        # ── 2단계: SeriesInstanceUID 기준 그룹핑 ────────────────
-        _t0 = time.perf_counter()  # ⏱ TIMER: 그룹핑 시작
+        # ?? 2?④퀎: SeriesInstanceUID 湲곗? 洹몃９??????????????????
+        _t0 = time.perf_counter()  # ??TIMER: 洹몃９???쒖옉
         series_dict: dict = {}
         for fpath, ds in file_headers:
             uid = str(getattr(ds, 'SeriesInstanceUID', 'unknown'))
@@ -3765,11 +4633,11 @@ class DicomViewer(QMainWindow):
         self._series_list.sort(
             key=lambda x: _tag(x[1][0][1], 'SeriesNumber', '9999').zfill(6)
         )
-        _t1 = time.perf_counter()  # ⏱ TIMER: 그룹핑 종료
-        print(f"[TIMER] 2단계 그룹핑:        {_t1-_t0:.3f}s  ({len(self._series_list)}개 시리즈)")
+        _t1 = time.perf_counter()  # ??TIMER: 洹몃９??醫낅즺
+        print(f"[TIMER] 2단계 시리즈 그룹:   {_t1-_t0:.3f}s  ({len(self._series_list)}개 시리즈)")
 
-        # ── 3단계: 시리즈별 썸네일 생성 (가운데 슬라이스) ──────
-        _t0 = time.perf_counter()  # ⏱ TIMER: 썸네일 시작
+        # ?? 3?④퀎: ?쒕━利덈퀎 ?몃꽕???앹꽦 (媛?대뜲 ?щ씪?댁뒪) ??????
+        _t0 = time.perf_counter()  # ??TIMER: ?몃꽕???쒖옉
         n_series = len(self._series_list)
         self._progress_show("Thumbnails", 0, n_series)
         self.statusBar().showMessage(tr('status_thumbnails').format(n=n_series))
@@ -3777,24 +4645,25 @@ class DicomViewer(QMainWindow):
         for i, (label, pairs) in enumerate(self._series_list):
             thumbs.append(self._make_thumbnail(pairs))
             self._progress_show("Thumbnails", i + 1, n_series)
-        _t1 = time.perf_counter()  # ⏱ TIMER: 썸네일 종료
-        print(f"[TIMER] 3단계 썸네일 생성:  {_t1-_t0:.3f}s  ({n_series}개 시리즈, 평균 {((_t1-_t0)/max(1,n_series)):.3f}s/시리즈)")
+        _t1 = time.perf_counter()  # ??TIMER: ?몃꽕??醫낅즺
+        print(f"[TIMER] 3단계 썸네일 생성:   {_t1-_t0:.3f}s  "
+              f"({n_series}개 시리즈, 평균 {((_t1-_t0)/max(1,n_series)):.3f}s/시리즈)")
 
-        # 사이드바
+        # ?ъ씠?쒕컮
         self.sidebar.set_study(file_headers[0][1])
         self.sidebar.populate(self._series_list, thumbs)
         self._series_page = 0
 
-        # ── 4단계: 첫 이미지 패널 로드 ─────────────────────────
-        _t0 = time.perf_counter()  # ⏱ TIMER: 이미지 로드 시작
+        # ?? 4?④퀎: 泥??대?吏 ?⑤꼸 濡쒕뱶 ?????????????????????????
+        _t0 = time.perf_counter()  # ??TIMER: ?대?吏 濡쒕뱶 ?쒖옉
         n = len(self._series_list)
         if n == 1:
             self.viewer_grid.set_layout('1x1')
             self.viewer_grid.load_to_active(self._series_list[0][1])
             msg = tr('status_1series').format(n=len(file_headers))
         else:
-            # 사용자가 1×1로 두고 있었다면 시리즈 수에 맞는 layout 자동 선택.
-            # 이미 multi-panel 모드면 그대로 존중 (3×3 골라뒀으면 9개 다 채움)
+            # ?ъ슜?먭? 1횞1濡??먭퀬 ?덉뿀?ㅻ㈃ ?쒕━利??섏뿉 留욌뒗 layout ?먮룞 ?좏깮.
+            # ?대? multi-panel 紐⑤뱶硫?洹몃?濡?議댁쨷 (3횞3 怨⑤씪??쇰㈃ 9媛???梨꾩?)
             if self.viewer_grid._mode == '1x1':
                 self.viewer_grid.set_layout(self._auto_pick_layout(n))
             ps = self._page_size()
@@ -3802,11 +4671,12 @@ class DicomViewer(QMainWindow):
             placed = min(n, ps)
             msg = tr('status_multi_series').format(
                 n=len(file_headers), s=n, p=placed, mode=self.viewer_grid._mode)
-        _t1 = time.perf_counter()  # ⏱ TIMER: 이미지 로드 종료
-        print(f"[TIMER] 4단계 이미지 패널 로드: {_t1-_t0:.3f}s")
+        _t1 = time.perf_counter()  # ??TIMER: ?대?吏 濡쒕뱶 醫낅즺
+        print(f"[TIMER] 4단계 패널 로드:     {_t1-_t0:.3f}s")
 
-        print(f"[TIMER] ─────────────────────────────────────────")
-        print(f"[TIMER] 전체 로딩:           {_t1-_t_start:.3f}s  (총 {total}파일, {len(self._series_list)}시리즈)")
+        print("[TIMER] ----------------------------------------")
+        print(f"[TIMER] 전체 로딩:           {_t1-_t_start:.3f}s  "
+              f"(총 {total}개 파일, {len(self._series_list)}개 시리즈)")
 
         self._update_page_label()
         self._progress_hide()
@@ -3814,7 +4684,7 @@ class DicomViewer(QMainWindow):
 
     @staticmethod
     def _auto_pick_layout(n_series):
-        """시리즈 수에 따라 가장 적합한 layout 추천."""
+        """?쒕━利??섏뿉 ?곕씪 媛???곹빀??layout 異붿쿇."""
         if n_series <= 1:  return '1x1'
         if n_series == 2:  return '1x2'
         if n_series <= 4:  return '2x2'
@@ -3830,16 +4700,16 @@ class DicomViewer(QMainWindow):
             self.sidebar.lw.setCurrentRow(idx)
 
     def _fill_grid_with_series(self):
-        """현재 layout의 패널 수만큼 시리즈를 채워 넣음."""
+        """?꾩옱 layout???⑤꼸 ?섎쭔???쒕━利덈? 梨꾩썙 ?ｌ쓬."""
         if not self._series_list:
             self.statusBar().showMessage(tr('status_need_folder'))
             return
         self._load_current_page()
 
     def _change_layout(self, mode):
-        """모든 layout 변경의 단일 진입점.
-        - set_layout으로 그리드 재구성 (기존 시리즈 자동 유지)
-        - 새로 생긴 빈 패널은 사이드바의 미사용 시리즈로 채움
+        """紐⑤뱺 layout 蹂寃쎌쓽 ?⑥씪 吏꾩엯??
+        - set_layout?쇰줈 洹몃━???ш뎄??(湲곗〈 ?쒕━利??먮룞 ?좎?)
+        - ?덈줈 ?앷릿 鍮??⑤꼸? ?ъ씠?쒕컮??誘몄궗???쒕━利덈줈 梨꾩?
         """
         grid = self.viewer_grid
         grid.set_layout(mode)
@@ -3849,7 +4719,7 @@ class DicomViewer(QMainWindow):
             return
 
         def _first_path(s):
-            """시리즈의 첫 파일 경로 반환 (안정적 매칭 키)."""
+            """?쒕━利덉쓽 泥??뚯씪 寃쎈줈 諛섑솚 (?덉젙??留ㅼ묶 ??."""
             if not s:
                 return None
             try:
@@ -3860,7 +4730,7 @@ class DicomViewer(QMainWindow):
                 pass
             return None
 
-        # 이미 채워진 패널 → _series_list 인덱스 매칭 (file path 기준)
+        # ?대? 梨꾩썙吏??⑤꼸 ??_series_list ?몃뜳??留ㅼ묶 (file path 湲곗?)
         used_idx = set()
         for p in grid.panels:
             p_path = _first_path(p.series)
@@ -3871,7 +4741,7 @@ class DicomViewer(QMainWindow):
                     used_idx.add(i)
                     break
 
-        # 빈 패널을 미사용 시리즈로 순서대로 채움
+        # 鍮??⑤꼸??誘몄궗???쒕━利덈줈 ?쒖꽌?濡?梨꾩?
         next_i = 0
         for p in grid.panels:
             if p.series:
@@ -3884,7 +4754,7 @@ class DicomViewer(QMainWindow):
             used_idx.add(next_i)
             next_i += 1
 
-        # 페이지 인덱스를 새 layout에 맞춰 갱신 — 첫 패널 위치 기준
+        # ?섏씠吏 ?몃뜳?ㅻ? ??layout??留욎떠 媛깆떊 ??泥??⑤꼸 ?꾩튂 湲곗?
         first = grid.panels[0] if grid.panels else None
         first_path = _first_path(first.series) if first else None
         if first_path is not None:
@@ -3906,13 +4776,17 @@ class DicomViewer(QMainWindow):
 
     def _toggle_tags(self):
         self.viewer_grid.toggle_tags_all()
-        state = self.viewer_grid.tag_state()
-        self.statusBar().showMessage(
-            tr('status_tags_on') if state else tr('status_tags_off')
-        )
+        show_tags, show_annotations = self.viewer_grid.overlay_state()
+        if show_tags and show_annotations:
+            msg = "Overlay: DICOM headers + annotations"
+        elif show_annotations:
+            msg = "Overlay: DICOM headers hidden, annotations visible"
+        else:
+            msg = "Overlay: DICOM headers and annotations hidden"
+        self.statusBar().showMessage(msg)
 
     def _show_shortcuts(self):
-        """전체 단축키 / 마우스 조작 가이드"""
+        """?꾩껜 ?⑥텞??/ 留덉슦??議곗옉 媛?대뱶"""
         lang = LocaleManager.instance().lang()
         html = _SHORTCUTS_HTML.get(lang, _SHORTCUTS_HTML['ko'])
 
@@ -3947,23 +4821,23 @@ class DicomViewer(QMainWindow):
         dlg.exec()
 
     def _show_about(self):
-        """About 대화상자"""
+        """Show application information."""
         QMessageBox.about(
             self,
             "About",
             "<h2>Hwang Viewer for Radiologic Presentation</h2>"
-            "<p><b>v3.11</b></p>"
+            "<p><b>v4.1</b></p>"
             f"<p>{tr('about_desc')}</p>"
-            "<p>© 2026 Sungil Hwang (황성일)<br>"
+            "<p>© 2026 Sungil Hwang<br>"
             "Department of Radiology<br>"
             "Seoul National University Bundang Hospital</p>"
-            "<p style='color:#888;'>Built with Python · PyQt6 · pydicom</p>"
+            "<p style='color:#888;'>Built with Python, PyQt6, and pydicom</p>"
         )
 
     def _toggle_panel_zoom(self):
-        """Space: 활성 패널 1×1 확대 ↔ 직전 multi-panel 레이아웃 복원 토글"""
+        """Toggle active panel between 1x1 zoom and previous multi-panel layout."""
         if self.viewer_grid._mode == '1x1':
-            # 1×1 → 직전 multi 레이아웃 복원
+            # 1횞1 ??吏곸쟾 multi ?덉씠?꾩썐 蹂듭썝
             if self.viewer_grid.restore_multi_state():
                 mode = self.viewer_grid._mode
                 self.statusBar().showMessage(tr('status_restore_mode').format(mode=mode))
@@ -3971,15 +4845,16 @@ class DicomViewer(QMainWindow):
                 self._load_current_page()
                 self.statusBar().showMessage(tr('status_restore_multi'))
         else:
-            # multi → 1×1: 현재 상태 저장 후 활성 패널 확대
+            # multi ??1횞1: ?꾩옱 ?곹깭 ??????쒖꽦 ?⑤꼸 ?뺣?
             active = self.viewer_grid.active_panel
             if active and active.series:
-                self.viewer_grid.save_multi_state()        # ← 상태 저장
+                self.viewer_grid.save_multi_state()        # ???곹깭 ???
                 saved       = active.series[:]
                 saved_idx   = active.idx
                 saved_wl    = active.wl
                 saved_ww    = active.ww
                 saved_zoom  = active.zoom
+                saved_ann   = getattr(active, '_annotations', [])[:]
                 self.viewer_grid.set_layout('1x1')
                 p = self.viewer_grid.panels[0]
                 p.series              = saved
@@ -3987,6 +4862,7 @@ class DicomViewer(QMainWindow):
                 p.wl                  = saved_wl
                 p.ww                  = saved_ww
                 p.zoom                = saved_zoom
+                p._annotations        = saved_ann
                 p._pixel_cache        = {}
                 p._active_bval_filter = None
                 p._build_dwi_info()
@@ -3995,7 +4871,7 @@ class DicomViewer(QMainWindow):
                 self.statusBar().showMessage(tr('status_zoom_1x1'))
 
     def _reset_active(self):
-        """활성 패널의 W/L만 리셋. zoom과 pan은 유지 (Reset Position이 따로 담당)."""
+        """?쒖꽦 ?⑤꼸??W/L留?由ъ뀑. zoom怨?pan? ?좎? (Reset Position???곕줈 ?대떦)."""
         p = self.viewer_grid.active_panel
         if p and p.series:
             if p.initial_wl is not None and p.initial_ww is not None:
@@ -4008,8 +4884,39 @@ class DicomViewer(QMainWindow):
                 p.sync_manager.broadcast_wl(p, p.wl, p.ww)
             self.statusBar().showMessage(tr('status_wl_reset'))
 
-    # ── Panning 모드 (P) ─────────────────────────────────────
+    # ?? Panning 紐⑤뱶 (P) ?????????????????????????????????????
+    def _set_annotation_tool(self, tool):
+        if tool == self._annotation_tool:
+            tool = 'none'
+        self._annotation_tool = tool
+        for name, action in self._annotation_actions.items():
+            action.blockSignals(True)
+            action.setChecked(name == tool)
+            action.blockSignals(False)
+        if tool != 'none':
+            self._pan_mode = False
+            for p in self.viewer_grid.panels:
+                p.setCursor(Qt.CursorShape.CrossCursor)
+            self.statusBar().showMessage(f"Annotation: {tool}")
+        else:
+            for p in self.viewer_grid.panels:
+                p.setCursor(Qt.CursorShape.ArrowCursor)
+            self.statusBar().showMessage("Annotation off")
+
+    def _clear_active_annotations(self):
+        p = self.viewer_grid.active_panel
+        if p is not None:
+            p.clear_annotations()
+            self.statusBar().showMessage("Annotations cleared")
+
+    def _clear_all_annotations(self):
+        for p in self.viewer_grid.panels:
+            p.clear_annotations()
+        self.statusBar().showMessage("All annotations cleared")
+
     def _toggle_pan_mode(self):
+        if self._annotation_tool != 'none':
+            self._set_annotation_tool('none')
         self._pan_mode = not self._pan_mode
         cursor = (Qt.CursorShape.OpenHandCursor if self._pan_mode
                   else Qt.CursorShape.ArrowCursor)
@@ -4020,7 +4927,7 @@ class DicomViewer(QMainWindow):
         else:
             self.statusBar().showMessage(tr('status_panning_off'))
 
-    # ── 캡처 ─────────────────────────────────────────────────
+    # ?? 罹≪쿂 ?????????????????????????????????????????????????
     def copy_active(self):
         pix = self.viewer_grid.grab_active()
         if pix:
@@ -4034,8 +4941,8 @@ class DicomViewer(QMainWindow):
             self.statusBar().showMessage(tr('status_copy_screen'))
 
     def copy_area(self):
-        """사용자가 viewer_grid 위에 사각형을 그려서 그 영역만 캡처."""
-        # 활성 패널 파란 테두리 + 모든 패널의 cross-hair 일시 제거
+        """?ъ슜?먭? viewer_grid ?꾩뿉 ?ш컖?뺤쓣 洹몃젮??洹??곸뿭留?罹≪쿂."""
+        # ?쒖꽦 ?⑤꼸 ?뚮? ?뚮몢由?+ 紐⑤뱺 ?⑤꼸??cross-hair ?쇱떆 ?쒓굅
         active = self.viewer_grid.active_panel
         was_active = False
         if active and active._active:
@@ -4043,14 +4950,14 @@ class DicomViewer(QMainWindow):
             active._active = False
             active.update()
 
-        # 모든 패널의 crosshair 잠시 끄기 (각 패널 별 backup)
+        # 紐⑤뱺 ?⑤꼸??crosshair ?좎떆 ?꾧린 (媛??⑤꼸 蹂?backup)
         crosshair_backup = []
         for p in self.viewer_grid.panels:
             crosshair_backup.append((p, p._crosshair))
             if p._crosshair is not None:
                 p._crosshair = None
                 if p._raw_pix:
-                    p._make_display()   # crosshair는 _disp_pix에 그려지므로 재생성 필요
+                    p._make_display()   # crosshair??_disp_pix??洹몃젮吏誘濡??ъ깮???꾩슂
         QApplication.processEvents()
 
         def on_done(rect):
@@ -4058,7 +4965,7 @@ class DicomViewer(QMainWindow):
                 if rect is None or rect.width() < 4 or rect.height() < 4:
                     self.statusBar().showMessage(tr('status_area_cancel'))
                     return
-                # 캡처 직전 — paint가 확실히 끝난 상태로 보장
+                # 罹≪쿂 吏곸쟾 ??paint媛 ?뺤떎???앸궃 ?곹깭濡?蹂댁옣
                 if active is not None:
                     active.repaint()
                 for p, _ch in crosshair_backup:
@@ -4066,7 +4973,7 @@ class DicomViewer(QMainWindow):
                 QApplication.processEvents()
 
                 full = self.viewer_grid.grab()
-                # HiDPI 보정
+                # HiDPI 蹂댁젙
                 dpr_x = full.width()  / max(1, self.viewer_grid.width())
                 dpr_y = full.height() / max(1, self.viewer_grid.height())
                 scaled = QRect(
@@ -4081,11 +4988,11 @@ class DicomViewer(QMainWindow):
                     tr('status_area_done').format(w=cropped.width(), h=cropped.height())
                 )
             finally:
-                # 활성 테두리 복원
+                # ?쒖꽦 ?뚮몢由?蹂듭썝
                 if was_active and active:
                     active._active = True
                     active.update()
-                # crosshair 복원
+                # crosshair 蹂듭썝
                 for p, ch in crosshair_backup:
                     if ch is not None:
                         p._crosshair = ch
@@ -4097,16 +5004,69 @@ class DicomViewer(QMainWindow):
         sel.raise_()
         sel.setFocus()
 
-    # ── 패널 이미지 이동 (PPT 캡처용 — 갭 조절 + 오버랩) ────
+    # ?? ?⑤꼸 ?대?吏 ?대룞 (PPT 罹≪쿂????媛?議곗젅 + ?ㅻ쾭?? ????
+    def _select_area_pixmap(self, on_pixmap):
+        active = self.viewer_grid.active_panel
+        was_active = False
+        if active and active._active:
+            was_active = True
+            active._active = False
+            active.update()
+
+        crosshair_backup = []
+        for p in self.viewer_grid.panels:
+            crosshair_backup.append((p, p._crosshair))
+            if p._crosshair is not None:
+                p._crosshair = None
+                if p._raw_pix:
+                    p._make_display()
+        QApplication.processEvents()
+
+        def on_done(rect):
+            try:
+                if rect is None or rect.width() < 4 or rect.height() < 4:
+                    self.statusBar().showMessage(tr('status_area_cancel'))
+                    return
+                if active is not None:
+                    active.repaint()
+                for p, _ch in crosshair_backup:
+                    p.repaint()
+                QApplication.processEvents()
+
+                full = self.viewer_grid.grab()
+                dpr_x = full.width() / max(1, self.viewer_grid.width())
+                dpr_y = full.height() / max(1, self.viewer_grid.height())
+                scaled = QRect(
+                    int(round(rect.x() * dpr_x)),
+                    int(round(rect.y() * dpr_y)),
+                    int(round(rect.width() * dpr_x)),
+                    int(round(rect.height() * dpr_y)),
+                )
+                on_pixmap(full.copy(scaled))
+            finally:
+                if was_active and active:
+                    active._active = True
+                    active.update()
+                for p, ch in crosshair_backup:
+                    if ch is not None:
+                        p._crosshair = ch
+                        if p._raw_pix:
+                            p._make_display()
+
+        sel = _AreaSelector(self.viewer_grid, on_done)
+        sel.show()
+        sel.raise_()
+        sel.setFocus()
+
     def _adjust_image_offset_delta(self, dx, dy):
-        """Shift+드래그에서 호출 — 이미지 offset에 (dx, dy) 더하기."""
+        """Shift+?쒕옒洹몄뿉???몄텧 ???대?吏 offset??(dx, dy) ?뷀븯湲?"""
         ox, oy = self.viewer_grid.adjust_image_offset_by(dx, dy)
         self.statusBar().showMessage(
             tr('status_img_offset_drag').format(ox=f"{ox:+d}", oy=f"{oy:+d}"), 3000
         )
 
     def set_image_offset_dialog(self):
-        """View 메뉴에서 호출 — 이미지 offset 수동 입력 (다른 환자에서도 같은 값 재사용)."""
+        """View 硫붾돱?먯꽌 ?몄텧 ???대?吏 offset ?섎룞 ?낅젰 (?ㅻⅨ ?섏옄?먯꽌??媛숈? 媛??ъ궗??."""
         ox, oy = self.viewer_grid.image_offset()
         x, ok = QInputDialog.getInt(
             self, tr('dlg_offset_x_title'), tr('dlg_offset_x_label'),
@@ -4124,7 +5084,7 @@ class DicomViewer(QMainWindow):
         self.statusBar().showMessage(tr('status_img_offset_set').format(nx=f"{nx:+d}", ny=f"{ny:+d}"))
 
     def reset_image_offset(self):
-        """모든 위치 관련 상태 리셋: 갭, 패널 이동, 모든 패널의 zoom + pan + W/L."""
+        """紐⑤뱺 ?꾩튂 愿???곹깭 由ъ뀑: 媛? ?⑤꼸 ?대룞, 紐⑤뱺 ?⑤꼸??zoom + pan + W/L."""
         self.viewer_grid.reset_image_offset()
         for p in self.viewer_grid.panels:
             if p.series:
@@ -4165,7 +5125,22 @@ class DicomViewer(QMainWindow):
                 pix.save(path)
                 self.statusBar().showMessage(tr('status_saved').format(path=path))
 
-    # ── 드래그&드롭 ──────────────────────────────────────────
+    def save_area(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Area", "capture_area",
+            "PNG (*.png);;JPEG (*.jpg);;BMP (*.bmp)"
+        )
+        if not path:
+            return
+
+        def on_pixmap(pix):
+            if pix:
+                pix.save(path)
+                self.statusBar().showMessage(tr('status_saved').format(path=path))
+
+        self._select_area_pixmap(on_pixmap)
+
+    # ?? ?쒕옒洹??쒕∼ ??????????????????????????????????????????
     def dragEnterEvent(self, event):
         event.accept() if event.mimeData().hasUrls() else event.ignore()
 
@@ -4175,9 +5150,9 @@ class DicomViewer(QMainWindow):
             self._load_path(urls[0].toLocalFile())
 
 
-# ─────────────────────────────────────────────────────────────
-#  진입점
-# ─────────────────────────────────────────────────────────────
+# ?????????????????????????????????????????????????????????????
+#  吏꾩엯??
+# ?????????????????????????????????????????????????????????????
 def main():
     missing = []
     if not PYQT_OK:
@@ -4210,5 +5185,6 @@ def main():
 
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()  # PyInstaller EXE에서 서브프로세스 spawn 허용
+    multiprocessing.freeze_support()  # PyInstaller EXE?먯꽌 ?쒕툕?꾨줈?몄뒪 spawn ?덉슜
     main()
+
