@@ -3784,12 +3784,118 @@ class SeriesSidebar(QWidget):
         self._tip_label.setText(tr('sidebar_tip'))
 
 
+class LoadingWindow(QWidget):
+    """Small startup/load indicator for the single-file EXE path."""
+
+    def __init__(self):
+        super().__init__(
+            None,
+            Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint
+        )
+        self.setObjectName("loadingWindow")
+        self.setFixedSize(420, 230)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(28, 24, 28, 22)
+        root.setSpacing(10)
+
+        title = QLabel("HwangViewer 4.1")
+        title.setObjectName("loadingTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root.addWidget(title)
+
+        subtitle = QLabel("Radiologic Presentation DICOM Viewer")
+        subtitle.setObjectName("loadingSubtitle")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root.addWidget(subtitle)
+
+        self.message = QLabel("Starting...")
+        self.message.setObjectName("loadingMessage")
+        self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root.addWidget(self.message)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(True)
+        root.addWidget(self.progress)
+
+        footer = QLabel("F1 Help  |  MIT License: free use, copy, modify, and distribute; no warranty.")
+        footer.setObjectName("loadingFooter")
+        footer.setWordWrap(True)
+        footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        root.addWidget(footer)
+
+        self.setStyleSheet("""
+            QWidget#loadingWindow {
+                background: #1f1f1f;
+                border: 1px solid #555;
+                border-radius: 8px;
+            }
+            QLabel#loadingTitle {
+                color: #f2f2f2;
+                font-size: 24px;
+                font-weight: 700;
+            }
+            QLabel#loadingSubtitle {
+                color: #b8c2cc;
+                font-size: 12px;
+            }
+            QLabel#loadingMessage {
+                color: #e0e0e0;
+                font-size: 13px;
+                padding-top: 8px;
+            }
+            QLabel#loadingFooter {
+                color: #9aa0a6;
+                font-size: 11px;
+            }
+            QProgressBar {
+                background: #111;
+                color: #f0f0f0;
+                border: 1px solid #555;
+                border-radius: 4px;
+                height: 18px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background: #0a84ff;
+                border-radius: 3px;
+            }
+        """)
+
+    def _center_on_screen(self):
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return
+        available = screen.availableGeometry()
+        self.move(
+            available.center().x() - self.width() // 2,
+            available.center().y() - self.height() // 2,
+        )
+
+    def set_progress(self, label, value, total):
+        total = max(1, int(total))
+        value = max(0, min(int(value), total))
+        pct = int(value * 100 / total)
+        self.message.setText(label)
+        self.progress.setValue(pct)
+        self.progress.setFormat(f"{pct}%")
+        if not self.isVisible():
+            self._center_on_screen()
+            self.show()
+        self.raise_()
+        QApplication.processEvents()
+
+
 # ?????????????????????????????????????????????????????????????
 #  硫붿씤 ?덈룄??
 # ?????????????????????????????????????????????????????????????
 class DicomViewer(QMainWindow):
-    def __init__(self):
+    def __init__(self, loading_window=None):
         super().__init__()
+        self._loading_window = loading_window or LoadingWindow()
+        self._loading_show("Starting Hwang Viewer", 5, 100)
         self.setWindowTitle("Hwang Viewer for Radiologic Presentation v4.1")
         self.setAcceptDrops(True)
         self._series_list = []
@@ -3800,10 +3906,15 @@ class DicomViewer(QMainWindow):
         self._build_annotation_actions()
 
         self._build_ui()
+        self._loading_show("Building menus", 35, 100)
         self._build_menu()
+        self._loading_show("Preparing toolbar", 55, 100)
         self._build_toolbar()
+        self._loading_show("Applying display settings", 75, 100)
         LocaleManager.instance().language_changed.connect(self.retranslate)
         self.showMaximized()       # ???쒖옉遺???꾩껜?붾㈃
+        self._loading_show("Ready", 100, 100)
+        self._loading_hide()
 
     def _build_ui(self):
         central = QWidget()
@@ -4081,6 +4192,15 @@ class DicomViewer(QMainWindow):
         self.sidebar.retranslate()
         self.viewer_grid.update()
 
+    def _loading_show(self, label, value=0, total=100):
+        if getattr(self, '_loading_window', None):
+            self._loading_window.set_progress(label, value, total)
+
+    def _loading_hide(self):
+        if getattr(self, '_loading_window', None) and self._loading_window.isVisible():
+            self._loading_window.hide()
+            QApplication.processEvents()
+
     # ?? progress bar ?ы띁 ???????????????????????????????????
     def _progress_show(self, label, value, total):
         self._progress.setRange(0, max(1, total))
@@ -4088,10 +4208,12 @@ class DicomViewer(QMainWindow):
         self._progress.setFormat(f"{label}: %v / %m  (%p%)")
         if not self._progress.isVisible():
             self._progress.show()
+        self._loading_show(label, value, total)
         QApplication.processEvents()
 
     def _progress_hide(self):
         self._progress.hide()
+        self._loading_hide()
         QApplication.processEvents()
 
     # ?? ?쒕━利?媛?대뜲 ?щ씪?댁뒪濡??몃꽕??QPixmap) ?앹꽦 ??????
@@ -4540,6 +4662,7 @@ class DicomViewer(QMainWindow):
             self._load_path(path)
 
     def _load_path(self, path):
+        self._loading_show("Scanning DICOM files", 0, 100)
         self.statusBar().showMessage(tr('status_scanning').format(path=path))
         QApplication.processEvents()
 
@@ -4553,6 +4676,7 @@ class DicomViewer(QMainWindow):
                               if f.is_file() and not f.name.startswith('.')]
 
         if not candidates:
+            self._loading_hide()
             self.statusBar().showMessage(tr('status_no_dicom_found'))
             QMessageBox.warning(self, tr('dlg_error_title'), tr('dlg_no_dicom'))
             return
