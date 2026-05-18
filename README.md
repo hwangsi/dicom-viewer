@@ -227,6 +227,10 @@ README.md          — 본 문서
 
 ## 앞으로의 개발예정
 ### V4.x
+
+#### 버그/UI 픽스
+- 다른 창 measurement 할 때 좌클릭 두번 해야 동일 measurement 가능한 거 수정
+  
 #### Multiple ROI at group selection
 - Group selection시 ROI를 하나에서만 그리면 동시에 그려짐
 - native DICOM 좌표에 맞게
