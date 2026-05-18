@@ -225,6 +225,21 @@ README.md          — 본 문서
 
 ---
 
+## 앞으로의 개발예정
+
+### multiple ROI at group selection
+- Group selection시 ROI를 하나에서만 그리면 동시에 그려짐
+- native DICOM 좌표에 맞게
+
+### Measurements Export to CSV
+- Measured ROI, length 등을 CSV 로 추출
+- 연구 데이터 확보에 용이
+
+### V5
+- Radiomics module 개발
+- 본격적 연구 이전 testing
+- 통계적 지원 
+
 ## v4.1 변경 사항 (v4.0 대비)
 
 ### Annotation 편집성 강화
