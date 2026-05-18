@@ -226,12 +226,12 @@ README.md          — 본 문서
 ---
 
 ## 앞으로의 개발예정
-
-### multiple ROI at group selection
+### V4.x
+#### Multiple ROI at group selection
 - Group selection시 ROI를 하나에서만 그리면 동시에 그려짐
 - native DICOM 좌표에 맞게
 
-### Measurements Export to CSV
+#### Measurements Export to CSV
 - Measured ROI, length 등을 CSV 로 추출
 - 연구 데이터 확보에 용이
 
