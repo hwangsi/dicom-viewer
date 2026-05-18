@@ -1,4 +1,4 @@
-# Hwang Viewer for Radiologic Presentation — v4.1
+# HwangViewer for Radiologic Presentation — v4.1
 
 강의 자료(PPT) 제작에 최적화된 가볍고 빠른 Windows DICOM 뷰어.
 레이아웃 자유, 갭줄이기, 확대, 축소, cross-link 가능하고, 전체화면 캡쳐, 선택화면 캡쳐 모두 가능하고 클립보드에 붙습니다.
