@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hwang Viewer for Radiologic Presentation v4.1
+Hwang Viewer for Radiologic Presentation v4.2
 ==========================================
 ?ㅼ튂: pip install pydicom pyqt6 numpy pylibjpeg
 
@@ -1630,6 +1630,76 @@ class DicomPanel(QWidget):
             'unit': self._annotation_unit(),
         }
 
+    def _sync_roi_to_group(self, src_item):
+        """Ctrl-그룹 선택 패널들에 DICOM 좌표 기준으로 ROI를 동기화."""
+        sm = self.sync_manager
+        if sm is None or not sm.is_active or not getattr(self, '_sync_selected', False):
+            return
+        ds_src = self._get_ds()
+        if ds_src is None or not _has_position_tags(ds_src):
+            return
+        p1_w = _pixel_to_world(ds_src, *src_item['p1'])
+        p2_w = _pixel_to_world(ds_src, *src_item['p2'])
+        if p1_w is None or p2_w is None:
+            return
+        for panel in list(sm._sync_set):
+            if panel is self or not panel.series:
+                continue
+            # DWI 패널은 현재 b-value를 유지하는 슬라이스 찾기 (set_crosshair_from_world 동일 방식)
+            best_i = (panel._find_dwi_slice(p1_w)
+                      if panel.dwi_info is not None
+                      else _find_best_slice(panel.series, p1_w))
+            ds_tgt = panel.series[best_i][1]
+            if not _has_position_tags(ds_tgt):
+                continue
+            tgt_p1 = _world_to_pixel(ds_tgt, p1_w)
+            tgt_p2 = _world_to_pixel(ds_tgt, p2_w)
+            if tgt_p1 is None or tgt_p2 is None:
+                continue
+            saved_wl, saved_ww = panel.wl, panel.ww   # WL/WW 절대 변경 금지
+            panel.idx = best_i
+            key = str(panel.series[best_i][0])
+            tgt_item = {'type': 'roi', 'slice': key, 'p1': tgt_p1, 'p2': tgt_p2}
+            stats = panel._roi_stats(tgt_p1, tgt_p2)
+            if stats is not None:
+                tgt_item['stats'] = stats
+            panel._annotations.append(tgt_item)
+            panel.wl, panel.ww = saved_wl, saved_ww   # 복원
+            panel._render()
+
+    def _propagate_roi_within_dwi(self, src_item):
+        """Multi-b-value DWI: 현재 b-value에서 그린 ROI를 같은 패널의 모든 b-value에 복제."""
+        di = self.dwi_info
+        if di is None:
+            return
+        src_idx = self.idx
+        src_pidx = (di['slice_pidx'][src_idx]
+                    if src_idx < len(di['slice_pidx']) else None)
+        if src_pidx is None:
+            return
+        src_bval = (di['slice_bval'][src_idx]
+                    if src_idx < len(di['slice_bval']) else None)
+        for bv in di['b_values']:
+            if bv == src_bval:
+                continue
+            tgt_idx = di['table'].get((src_pidx, bv))
+            if tgt_idx is None:
+                continue
+            key = str(self.series[tgt_idx][0])
+            tgt_item = {
+                'type': 'roi',
+                'slice': key,
+                'p1': src_item['p1'],
+                'p2': src_item['p2'],
+            }
+            # 같은 위치의 다른 b-value 슬라이스로 임시 이동해 통계 계산
+            self.idx = tgt_idx
+            stats = self._roi_stats(src_item['p1'], src_item['p2'])
+            self.idx = src_idx
+            if stats is not None:
+                tgt_item['stats'] = stats
+            self._annotations.append(tgt_item)
+
     def _annotation_label_rect(self, x, y, lines, item=None):
         if not lines:
             return None
@@ -1981,6 +2051,9 @@ class DicomPanel(QWidget):
                     return True
                 item['stats'] = stats
             self._annotations.append(item)
+            if item.get('type') == 'roi':
+                self._propagate_roi_within_dwi(item)
+                self._sync_roi_to_group(item)
             self.update()
             return True
         except Exception as exc:
@@ -2086,8 +2159,6 @@ class DicomPanel(QWidget):
                 and getattr(self.window(), '_annotation_tool', 'none') != 'none'):
             if vg is not None and hasattr(vg, 'active_panel') and real is not vg.active_panel:
                 vg._activate(real)
-                event.accept()
-                return
             if real is not self and vg is not None:
                 vg._activate(real)
                 ann_pos = QPoint(gx - real.x(), gy - real.y())
@@ -2426,7 +2497,11 @@ class DicomPanel(QWidget):
             return
         _wl, _ww = self.wl, self.ww
         self._active_bval_filter = bval
-        self.idx = pool[0]              # reset to first slice in filtered pool
+        # 현재 z-위치(pidx) 보존: 같은 해부학적 위치의 새 b-value 슬라이스로 이동
+        cur_pidx = (di['slice_pidx'][self.idx]
+                    if self.idx < len(di['slice_pidx']) else None)
+        same_pos = di['table'].get((cur_pidx, bval)) if cur_pidx is not None else None
+        self.idx = same_pos if same_pos is not None else pool[0]
         self._render()
         self.wl, self.ww = _wl, _ww
 
@@ -3799,7 +3874,7 @@ class LoadingWindow(QWidget):
         root.setContentsMargins(28, 24, 28, 22)
         root.setSpacing(10)
 
-        title = QLabel("HwangViewer 4.1")
+        title = QLabel("HwangViewer 4.2")
         title.setObjectName("loadingTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(title)
@@ -3896,7 +3971,7 @@ class DicomViewer(QMainWindow):
         super().__init__()
         self._loading_window = loading_window or LoadingWindow()
         self._loading_show("Starting Hwang Viewer", 5, 100)
-        self.setWindowTitle("Hwang Viewer for Radiologic Presentation v4.1")
+        self.setWindowTitle("Hwang Viewer for Radiologic Presentation v4.2")
         self.setAcceptDrops(True)
         self._series_list = []
         self._series_page = 0      # ?꾩옱 ?섏씠吏 (0-based)
@@ -4950,7 +5025,7 @@ class DicomViewer(QMainWindow):
             self,
             "About",
             "<h2>Hwang Viewer for Radiologic Presentation</h2>"
-            "<p><b>v4.1</b></p>"
+            "<p><b>v4.2</b></p>"
             f"<p>{tr('about_desc')}</p>"
             "<p>© 2026 Sungil Hwang<br>"
             "Department of Radiology<br>"

@@ -1,4 +1,4 @@
-# HwangViewer for Radiologic Presentation — v4.1
+# HwangViewer for Radiologic Presentation — v4.2
 
 강의 자료(PPT) 제작에 최적화된 가볍고 빠른 Windows DICOM 뷰어.
 레이아웃 자유, 갭줄이기, 확대, 축소, cross-link 가능하고, 전체화면 캡쳐, 선택화면 캡쳐 모두 가능하고 클립보드에 붙습니다.
@@ -243,6 +243,25 @@ README.md          — 본 문서
 - Radiomics module 개발
 - 본격적 연구 이전 testing
 - 통계적 지원 
+
+## v4.2 변경 사항 (v4.1 대비)
+
+### 그룹 선택 ROI 동기화
+
+- **Ctrl+클릭**으로 여러 패널을 선택한 상태에서 한 패널에 ROI를 그리면, 선택된 모든 패널의 DICOM 물리좌표 기준 동일 위치·크기에 ROI가 자동 생성되고 각 패널의 통계값이 독립적으로 측정됩니다.
+- ADC/DWI 혼합 그룹에서 ROI 동기화 시 WL/WW가 변경되지 않도록 수정했습니다.
+- DWI 패널은 b-value 동기화 시 현재 b-value를 유지하는 슬라이스를 선택합니다.
+
+### Multi-b-value DWI ROI 전파
+
+- Multi-b-value DWI 패널에서 특정 b-value로 ROI를 그리면, 같은 z-위치의 모든 b-value 슬라이스에 동일한 ROI와 통계값이 자동으로 전파됩니다.
+- b-value 전환 시 z-축 위치(해부학적 위치)가 보존됩니다. 이전에는 b-value 변경 시 첫 번째 슬라이스로 이동하는 버그가 있었습니다.
+
+### Annotation UX 개선
+
+- Annotation 모드에서 다른 패널을 클릭하면 패널 전환과 동시에 즉시 드로잉이 시작됩니다. 이전에는 첫 번째 클릭은 패널 활성화에만 사용되어 두 번 클릭해야 했습니다.
+
+---
 
 ## v4.1 변경 사항 (v4.0 대비)
 
